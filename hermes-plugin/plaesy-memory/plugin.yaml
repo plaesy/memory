@@ -1,0 +1,7 @@
+name: plaesy-memory
+version: 0.1.0
+description: "Plaesy Memory — offline hybrid (ONNX vectors + FTS5) retrieval over .plaesy/ with mandatory source citations."
+external_dependencies:
+  - name: plaesy-memory-plugin
+    install: "cargo build --release  # then: make install-hermes-plugin"
+    check: "plaesy-memory-plugin --version"
