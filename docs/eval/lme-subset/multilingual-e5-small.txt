@@ -1,0 +1,29 @@
+loading <datasets>/longmemeval_s_cleaned.json ...
+94 questions (of 500; stride 5; workers 2)
+embedding model: multilingual-e5-small
+rerank modes are skipped (no cross-encoder, or LME_SKIP_RERANK set)
+[10/94]    612s  hybrid R@5 so far 0.900
+[20/94]   1203s  hybrid R@5 so far 0.900
+[30/94]   1813s  hybrid R@5 so far 0.900
+[40/94]   2417s  hybrid R@5 so far 0.925
+[50/94]   3023s  hybrid R@5 so far 0.940
+[60/94]   3600s  hybrid R@5 so far 0.917
+[70/94]   4174s  hybrid R@5 so far 0.929
+[80/94]   4761s  hybrid R@5 so far 0.938
+[90/94]   5352s  hybrid R@5 so far 0.944
+[94/94]   5574s  hybrid R@5 so far 0.947
+
+LongMemEval-S retrieval, session level, 94 questions (model multilingual-e5-small)
+mode           R@1     R@3     R@5    R@10     MRR
+keyword      0.798   0.904   0.936   0.979   0.861
+semantic     0.862   0.936   0.968   0.968   0.903
+hybrid       0.883   0.915   0.947   0.989   0.908
+
+R@5 by question type
+  knowledge-update           n=14   keyword 1.000  semantic 1.000  hybrid 1.000
+  multi-session              n=24   keyword 0.958  semantic 1.000  hybrid 0.958
+  single-session-assistant   n=11   keyword 1.000  semantic 1.000  hybrid 1.000
+  single-session-preference  n=6    keyword 0.500  semantic 0.833  hybrid 0.833
+  single-session-user        n=13   keyword 1.000  semantic 0.923  hybrid 0.923
+  temporal-reasoning         n=26   keyword 0.923  semantic 0.962  hybrid 0.923
+wrote docs/eval/lme-subset/multilingual-e5-small.json

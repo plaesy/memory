@@ -1,0 +1,22 @@
+# Auto normalize line endings to LF in repository
+* text=auto
+
+# Explicit line ending for text files
+*.rs text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.sh text eol=lf eol=crlf
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary files
+*.exe binary
+*.db binary
+*.onnx binary
+*.png binary
+*.jpg binary
+*.svg binary

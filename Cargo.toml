@@ -1,0 +1,97 @@
+[package]
+name = "plaesy-memory"
+version = "0.1.0"
+edition = "2021"
+authors = ["Plaesy Team"]
+description = "Offline-first memory indexing for Hermes Agent"
+license = "MIT"
+repository = "https://github.com/plaesy/memory"
+readme = "README.md"
+keywords = ["memory", "vector-search", "hermes", "embeddings", "semantic-search", "mcp"]
+categories = ["database", "embedded-systems"]
+
+[lib]
+name = "plaesy"
+path = "src/lib.rs"
+
+[[bin]]
+name = "memory"
+path = "src/bin/cli.rs"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1.40", features = ["full"] }
+
+# Vector search
+usearch = { version = "2.15", default-features = false }
+
+# ONNX Runtime (embeddings)
+ort = { version = "2.0.0-rc.14", default-features = false, features = ["std", "ndarray", "tracing", "download-binaries", "tls-rustls", "copy-dylibs", "api-31"] }
+
+# SQLite storage
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# File watching
+notify = { version = "8", features = ["macos_fsevent"] }
+walkdir = "2.4"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+ureq = { version = "3", default-features = false, features = ["rustls", "gzip"] }
+
+# Concurrency
+parking_lot = "0.12"
+
+# Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+thiserror = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4.5", features = ["derive"] }
+
+# Per-OS standard directories (cache, data, home) for model and database defaults
+dirs = "5"
+
+# Memory efficiency
+lru = "0.12"
+serde_yaml = "0.9"
+sha2 = "0.10"
+toml = "0.8"
+tokenizers = { version = "0.23.2", default-features = false, features = ["fancy-regex"] }
+
+# HTTP server for MCP Streamable HTTP transport (n8n, Dify, Kilo Code, Paperclip, etc.)
+axum = { version = "0.7", features = ["json"] }
+tokio-util = { version = "0.7", features = ["io-util"] }
+futures-util = { version = "0.3", default-features = false, features = ["std", "io", "sink"] }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+proptest = "1.4"
+tempfile = "3.8"
+tokio = { version = "1.40", features = ["full"] }
+futures = "0.3"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+[profile.bench]
+inherits = "release"
+
+[profile.dev]
+opt-level = 1
+
+[[bench]]
+name = "hnsw_search"
+harness = false
+
+[[bench]]
+name = "embedding"
+harness = false
+
+[[bench]]
+name = "end_to_end"
+harness = false

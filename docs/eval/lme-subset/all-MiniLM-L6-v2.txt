@@ -1,0 +1,31 @@
+cargo run --release --example longmemeval -- "<datasets>/longmemeval_s_cleaned.json" --stride 5
+    Finished `release` profile [optimized] target(s) in 1.13s
+     Running `target\release\examples\longmemeval.exe '<datasets>/longmemeval_s_cleaned.json' --stride 5`
+loading <datasets>/longmemeval_s_cleaned.json ...
+94 questions (of 500; stride 5)
+embedding model: all-MiniLM-L6-v2
+rerank modes are skipped (no cross-encoder, or LME_SKIP_RERANK set)
+[10/94]    396s  hybrid R@5 so far 0.900  (embed cache hit 2%)
+[20/94]    780s  hybrid R@5 so far 0.950  (embed cache hit 3%)
+[30/94]   1169s  hybrid R@5 so far 0.933  (embed cache hit 3%)
+[40/94]   1513s  hybrid R@5 so far 0.950  (embed cache hit 3%)
+[50/94]   1755s  hybrid R@5 so far 0.960  (embed cache hit 3%)
+[60/94]   1991s  hybrid R@5 so far 0.950  (embed cache hit 4%)
+[70/94]   2210s  hybrid R@5 so far 0.957  (embed cache hit 5%)
+[80/94]   2483s  hybrid R@5 so far 0.963  (embed cache hit 6%)
+[90/94]   2757s  hybrid R@5 so far 0.967  (embed cache hit 6%)
+[94/94]   2850s  hybrid R@5 so far 0.968  (embed cache hit 6%)
+
+LongMemEval-S retrieval, session level, 94 questions
+mode           R@1     R@3     R@5    R@10     MRR
+keyword      0.798   0.904   0.936   0.979   0.861
+semantic     0.840   0.936   0.957   0.979   0.889
+hybrid       0.840   0.926   0.968   0.979   0.891
+
+R@5 by question type
+  knowledge-update           n=14   keyword 1.000  semantic 1.000  hybrid 1.000
+  multi-session              n=24   keyword 0.958  semantic 1.000  hybrid 1.000
+  single-session-assistant   n=11   keyword 1.000  semantic 1.000  hybrid 1.000
+  single-session-preference  n=6    keyword 0.500  semantic 0.833  hybrid 0.833
+  single-session-user        n=13   keyword 1.000  semantic 0.923  hybrid 0.923
+  temporal-reasoning         n=26   keyword 0.923  semantic 0.923  hybrid 0.962
