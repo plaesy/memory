@@ -31,7 +31,15 @@ valid_to:                # optional
 
 Rules that match the engine's behaviour:
 
-- Keep credentials out of notes. The index stores the text, and `memory_search` can return it to a model. See the secret-scan item in [ASSESSMENT](ASSESSMENT.md).
+- Keep credentials out of notes. The index stores the text, and `memory_search` can return it to a model. `memory hygiene` also reports likely API keys, passwords, bearer/access tokens, client secrets, and private-key headers by file and line, but never includes the matched value. Treat findings as review signals, not proof; fenced code examples are ignored. See the secret-scan item in [ASSESSMENT](ASSESSMENT.md).
+
+To inspect only likely credential findings in JSON:
+
+```powershell
+memory hygiene "<vault>" --json | ConvertFrom-Json | Select-Object -ExpandProperty findings | Where-Object kind -eq possible_secret
+```
+
+The scanner is read-only and heuristic. Remove or rotate a credential outside the memory tool; do not paste the value into bug reports or agent prompts.
 - A note older than 180 days (`last_verified`) is flagged STALE and its score is multiplied by 0.85. It is down-weighted, not hidden.
 - Use `[[wikilinks]]` for relations. They power `memory backlinks` and dangling-link checks.
 - Folder names are tiers by default: put episodic logs in an `episodic` folder, not in `semantic`.

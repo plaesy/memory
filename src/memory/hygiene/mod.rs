@@ -13,6 +13,18 @@
 //! | `broken_link` | a `[[wikilink]]` resolves to no indexed document | FACT |
 //! | `superseded_without_replacement` | `status: superseded` but no `superseded_by` | FACT |
 //! | `dead_path_reference` | a backticked relative file path does not exist on disk | INFERRED |
+//! | `possible_secret` | a likely credential marker appears in note text; value is never returned | FACT |
+
+//! Secret findings report only kind and line number. They never include the matched value.
+
+//! Set [`HygieneOptions::scan_secrets`] to `false` only for compatibility with a caller that
+//! explicitly does not want this check.
+
+//! The check intentionally favours recall over certainty; findings require human review.
+
+//! It ignores fenced code blocks to avoid flagging examples and source snippets.
+
+//! It is not a replacement for a dedicated secret scanner.
 //!
 //! `dead_path_reference` is a heuristic (the path may legitimately refer to another repository),
 //! hence `INFERRED`; every other finding is read straight from the index.
@@ -31,7 +43,7 @@ const PATH_EXTENSIONS: [&str; 12] = [
 ];
 
 /// Options for [`SearchEngine::hygiene`].
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct HygieneOptions {
     /// Directory the indexed paths are relative to. Enables `dead_path_reference` checks
     /// (also resolved against its parent, i.e. the project root for `.plaesy/`).
@@ -42,6 +54,60 @@ pub struct HygieneOptions {
 
     /// Clock override (tests).
     pub now: Option<DateTime<Utc>>,
+
+    /// Scan note text for likely credentials without returning their values.
+    pub scan_secrets: bool,
+}
+
+impl Default for HygieneOptions {
+    fn default() -> Self {
+        Self {
+            root: None,
+            stale_after_days: None,
+            now: None,
+            scan_secrets: true,
+        }
+    }
+}
+
+/// Return `(kind, 1-based line)` for likely credentials. Values are never returned.
+pub fn secret_references(body: &str) -> Vec<(String, usize)> {
+    let mut findings = Vec::new();
+    let mut in_fence = false;
+    for (index, line) in body.lines().enumerate() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            in_fence = !in_fence;
+            continue;
+        }
+        if in_fence {
+            continue;
+        }
+        let lower = line.to_ascii_lowercase();
+        let kind = if lower.contains("-----begin ") && lower.contains("private key-----") {
+            Some("private_key")
+        } else if lower.contains("api_key")
+            || lower.contains("api-key")
+            || lower.contains("api key")
+        {
+            Some("api_key")
+        } else if lower.contains("password") || lower.contains("passwd") {
+            Some("password")
+        } else if lower.contains("access_token")
+            || lower.contains("access-token")
+            || lower.contains("bearer ")
+        {
+            Some("access_token")
+        } else if lower.contains("client_secret") || lower.contains("client-secret") {
+            Some("client_secret")
+        } else {
+            None
+        };
+        if let Some(kind) = kind {
+            findings.push((kind.to_string(), index + 1));
+        }
+    }
+    findings
 }
 
 /// One problem found in the memory.
@@ -186,6 +252,18 @@ impl SearchEngine {
                 }
             }
 
+            if opts.scan_secrets {
+                for (kind, line) in secret_references(body) {
+                    findings.push(finding(
+                        "possible_secret",
+                        path,
+                        Some(line + doc.body_start_line - 1),
+                        format!("possible {kind}; value omitted"),
+                        "FACT",
+                    ));
+                }
+            }
+
             // Verification metadata is only demanded of notes that make claims about the world.
             if matches!(tier, Some("core") | Some("semantic") | Some("procedural")) {
                 if meta.last_verified.is_none() {
@@ -295,5 +373,16 @@ mod tests {
         assert_eq!(refs, vec!["src/lib.rs", "docs/guide.md"]);
         let lines: Vec<usize> = path_references(body).into_iter().map(|(_, l)| l).collect();
         assert_eq!(lines, vec![1, 5]);
+    }
+
+    #[test]
+    fn secret_references_report_kind_and_line_without_value() {
+        let body = "safe\nOPENAI_API_KEY=sk-test-value\npassword = \"do-not-return\"\n-----BEGIN PRIVATE KEY-----\n";
+        let findings = secret_references(body);
+        assert_eq!(findings.len(), 3);
+        assert_eq!(findings[0], ("api_key".to_string(), 2));
+        assert_eq!(findings[1], ("password".to_string(), 3));
+        assert_eq!(findings[2], ("private_key".to_string(), 4));
+        assert!(!format!("{findings:?}").contains("do-not-return"));
     }
 }
