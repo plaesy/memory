@@ -159,7 +159,8 @@ fn decode(doc: &StoredDocument) -> Option<Result<GraphNote, String>> {
     let project = as_str(doc.metadata.get("project"));
     let scope = as_str_vec(doc.metadata.get("scope"));
     let supersedes = as_str_vec(doc.metadata.get("supersedes"));
-    let updated = as_str(doc.metadata.get("updated")).or_else(|| as_str(doc.metadata.get("last_verified")));
+    let updated =
+        as_str(doc.metadata.get("updated")).or_else(|| as_str(doc.metadata.get("last_verified")));
     Some(Ok(GraphNote {
         path: doc.path.clone(),
         id,
@@ -202,12 +203,18 @@ pub async fn load_graph(db: &Database) -> crate::memory::error::Result<Graph> {
 impl Graph {
     /// All `type: project` notes.
     pub fn projects(&self) -> Vec<&GraphNote> {
-        self.notes.iter().filter(|n| n.note_type == "project").collect()
+        self.notes
+            .iter()
+            .filter(|n| n.note_type == "project")
+            .collect()
     }
 
     /// All notes of `note_type`.
     pub fn of_type(&self, note_type: &str) -> Vec<&GraphNote> {
-        self.notes.iter().filter(|n| n.note_type == note_type).collect()
+        self.notes
+            .iter()
+            .filter(|n| n.note_type == note_type)
+            .collect()
     }
 
     /// Ids of every active (or any-status) `type: project` note, duplicates removed, for
@@ -244,7 +251,10 @@ pub fn resolve_project<'a>(graph: &'a Graph, query: &str) -> Resolved<'a> {
     {
         return Resolved::Found(by_title);
     }
-    let prefix_matches: Vec<&&GraphNote> = projects.iter().filter(|p| p.id.starts_with(query)).collect();
+    let prefix_matches: Vec<&&GraphNote> = projects
+        .iter()
+        .filter(|p| p.id.starts_with(query))
+        .collect();
     match prefix_matches.len() {
         1 => Resolved::Found(prefix_matches[0]),
         n if n > 1 => Resolved::Ambiguous {
@@ -259,7 +269,8 @@ pub fn resolve_project<'a>(graph: &'a Graph, query: &str) -> Resolved<'a> {
             let suggestions: Vec<String> = projects
                 .iter()
                 .filter(|p| {
-                    p.title.to_lowercase().contains(&needle) || p.id.to_lowercase().contains(&needle)
+                    p.title.to_lowercase().contains(&needle)
+                        || p.id.to_lowercase().contains(&needle)
                 })
                 .map(|p| format!("{} ({})", p.id, p.title))
                 .collect();
@@ -346,7 +357,10 @@ pub fn supersession_map(graph: &Graph) -> (Vec<SupersessionWarning>, HashMap<Str
             continue;
         }
         for target in &d.supersedes {
-            claimants.entry(target.clone()).or_default().push(d.id.clone());
+            claimants
+                .entry(target.clone())
+                .or_default()
+                .push(d.id.clone());
         }
     }
     let conflicts = claimants
@@ -425,7 +439,11 @@ mod tests {
     fn invalid_status_for_type_is_malformed() {
         let g = graph_of(vec![doc(
             "p.md",
-            &[("type", s("project")), ("id", s("p1")), ("status", s("superseded"))],
+            &[
+                ("type", s("project")),
+                ("id", s("p1")),
+                ("status", s("superseded")),
+            ],
         )]);
         assert!(g.notes.is_empty());
         assert_eq!(g.malformed.len(), 1);
@@ -441,16 +459,27 @@ mod tests {
     fn resolve_exact_id() {
         let g = graph_of(vec![doc(
             "a.md",
-            &[("type", s("project")), ("id", s("studio-a")), ("title", s("Studio A"))],
+            &[
+                ("type", s("project")),
+                ("id", s("studio-a")),
+                ("title", s("Studio A")),
+            ],
         )]);
-        assert!(matches!(resolve_project(&g, "studio-a"), Resolved::Found(_)));
+        assert!(matches!(
+            resolve_project(&g, "studio-a"),
+            Resolved::Found(_)
+        ));
     }
 
     #[test]
     fn resolve_by_title_case_insensitive() {
         let g = graph_of(vec![doc(
             "a.md",
-            &[("type", s("project")), ("id", s("studio-a")), ("title", s("Studio A"))],
+            &[
+                ("type", s("project")),
+                ("id", s("studio-a")),
+                ("title", s("Studio A")),
+            ],
         )]);
         match resolve_project(&g, "studio a") {
             Resolved::Found(n) => assert_eq!(n.id, "studio-a"),
@@ -462,7 +491,11 @@ mod tests {
     fn resolve_unique_prefix() {
         let g = graph_of(vec![doc(
             "a.md",
-            &[("type", s("project")), ("id", s("8f3a2c1e")), ("title", s("studio"))],
+            &[
+                ("type", s("project")),
+                ("id", s("8f3a2c1e")),
+                ("title", s("studio")),
+            ],
         )]);
         match resolve_project(&g, "8f3a") {
             Resolved::Found(n) => assert_eq!(n.id, "8f3a2c1e"),
@@ -473,8 +506,22 @@ mod tests {
     #[test]
     fn resolve_ambiguous_prefix_lists_every_candidate() {
         let g = graph_of(vec![
-            doc("a.md", &[("type", s("project")), ("id", s("8f3a-one")), ("title", s("A"))]),
-            doc("b.md", &[("type", s("project")), ("id", s("8f3a-two")), ("title", s("B"))]),
+            doc(
+                "a.md",
+                &[
+                    ("type", s("project")),
+                    ("id", s("8f3a-one")),
+                    ("title", s("A")),
+                ],
+            ),
+            doc(
+                "b.md",
+                &[
+                    ("type", s("project")),
+                    ("id", s("8f3a-two")),
+                    ("title", s("B")),
+                ],
+            ),
         ]);
         match resolve_project(&g, "8f3a") {
             Resolved::Ambiguous { candidates, .. } => assert_eq!(candidates.len(), 2),
@@ -486,7 +533,11 @@ mod tests {
     fn resolve_not_found_suggests_fuzzy_matches() {
         let g = graph_of(vec![doc(
             "a.md",
-            &[("type", s("project")), ("id", s("autonomous-venture-studio")), ("title", s("Autonomous Venture Studio"))],
+            &[
+                ("type", s("project")),
+                ("id", s("autonomous-venture-studio")),
+                ("title", s("Autonomous Venture Studio")),
+            ],
         )]);
         match resolve_project(&g, "venture") {
             Resolved::NotFound { suggestions, .. } => assert_eq!(suggestions.len(), 1),
@@ -498,7 +549,11 @@ mod tests {
     fn resolve_not_found_with_no_suggestions_when_nothing_close() {
         let g = graph_of(vec![doc(
             "a.md",
-            &[("type", s("project")), ("id", s("studio-a")), ("title", s("Studio A"))],
+            &[
+                ("type", s("project")),
+                ("id", s("studio-a")),
+                ("title", s("Studio A")),
+            ],
         )]);
         match resolve_project(&g, "zzzz") {
             Resolved::NotFound { suggestions, .. } => assert!(suggestions.is_empty()),
@@ -509,8 +564,22 @@ mod tests {
     #[test]
     fn decisions_default_hides_superseded_and_revoked() {
         let g = graph_of(vec![
-            doc("d1.md", &[("type", s("decision")), ("id", s("d1")), ("status", s("active"))]),
-            doc("d2.md", &[("type", s("decision")), ("id", s("d2")), ("status", s("superseded"))]),
+            doc(
+                "d1.md",
+                &[
+                    ("type", s("decision")),
+                    ("id", s("d1")),
+                    ("status", s("active")),
+                ],
+            ),
+            doc(
+                "d2.md",
+                &[
+                    ("type", s("decision")),
+                    ("id", s("d2")),
+                    ("status", s("superseded")),
+                ],
+            ),
         ]);
         let shown = list(&g, "decision", &ListFilter::default());
         assert_eq!(shown.len(), 1);
@@ -520,10 +589,27 @@ mod tests {
     #[test]
     fn include_inactive_shows_everything() {
         let g = graph_of(vec![
-            doc("d1.md", &[("type", s("decision")), ("id", s("d1")), ("status", s("active"))]),
-            doc("d2.md", &[("type", s("decision")), ("id", s("d2")), ("status", s("superseded"))]),
+            doc(
+                "d1.md",
+                &[
+                    ("type", s("decision")),
+                    ("id", s("d1")),
+                    ("status", s("active")),
+                ],
+            ),
+            doc(
+                "d2.md",
+                &[
+                    ("type", s("decision")),
+                    ("id", s("d2")),
+                    ("status", s("superseded")),
+                ],
+            ),
         ]);
-        let filter = ListFilter { include_inactive: true, ..ListFilter::default() };
+        let filter = ListFilter {
+            include_inactive: true,
+            ..ListFilter::default()
+        };
         assert_eq!(list(&g, "decision", &filter).len(), 2);
     }
 
@@ -531,9 +617,16 @@ mod tests {
     fn explicit_status_overrides_default_hiding() {
         let g = graph_of(vec![doc(
             "d2.md",
-            &[("type", s("decision")), ("id", s("d2")), ("status", s("superseded"))],
+            &[
+                ("type", s("decision")),
+                ("id", s("d2")),
+                ("status", s("superseded")),
+            ],
         )]);
-        let filter = ListFilter { status: vec!["superseded".into()], ..ListFilter::default() };
+        let filter = ListFilter {
+            status: vec!["superseded".into()],
+            ..ListFilter::default()
+        };
         assert_eq!(list(&g, "decision", &filter).len(), 1);
     }
 
@@ -541,9 +634,16 @@ mod tests {
     fn project_filter_matches_direct_owner() {
         let g = graph_of(vec![doc(
             "d.md",
-            &[("type", s("decision")), ("id", s("d1")), ("project", s("studio-a"))],
+            &[
+                ("type", s("decision")),
+                ("id", s("d1")),
+                ("project", s("studio-a")),
+            ],
         )]);
-        let filter = ListFilter { projects: vec!["studio-a".into()], ..ListFilter::default() };
+        let filter = ListFilter {
+            projects: vec!["studio-a".into()],
+            ..ListFilter::default()
+        };
         assert_eq!(list(&g, "decision", &filter).len(), 1);
     }
 
@@ -558,7 +658,10 @@ mod tests {
                 ("scope", Value::Array(vec![s("studio-a")])),
             ],
         )]);
-        let filter = ListFilter { projects: vec!["studio-a".into()], ..ListFilter::default() };
+        let filter = ListFilter {
+            projects: vec!["studio-a".into()],
+            ..ListFilter::default()
+        };
         let shown = list(&g, "decision", &filter);
         assert_eq!(shown.len(), 1);
         assert!(shown[0].is_shared_only("studio-a"));
@@ -567,11 +670,35 @@ mod tests {
     #[test]
     fn multiple_project_flags_are_union_not_intersection() {
         let g = graph_of(vec![
-            doc("d1.md", &[("type", s("decision")), ("id", s("d1")), ("project", s("a"))]),
-            doc("d2.md", &[("type", s("decision")), ("id", s("d2")), ("project", s("b"))]),
-            doc("d3.md", &[("type", s("decision")), ("id", s("d3")), ("project", s("c"))]),
+            doc(
+                "d1.md",
+                &[
+                    ("type", s("decision")),
+                    ("id", s("d1")),
+                    ("project", s("a")),
+                ],
+            ),
+            doc(
+                "d2.md",
+                &[
+                    ("type", s("decision")),
+                    ("id", s("d2")),
+                    ("project", s("b")),
+                ],
+            ),
+            doc(
+                "d3.md",
+                &[
+                    ("type", s("decision")),
+                    ("id", s("d3")),
+                    ("project", s("c")),
+                ],
+            ),
         ]);
-        let filter = ListFilter { projects: vec!["a".into(), "b".into()], ..ListFilter::default() };
+        let filter = ListFilter {
+            projects: vec!["a".into(), "b".into()],
+            ..ListFilter::default()
+        };
         assert_eq!(list(&g, "decision", &filter).len(), 2);
     }
 
@@ -579,15 +706,25 @@ mod tests {
     fn project_filter_with_unknown_id_is_empty_not_an_error() {
         let g = graph_of(vec![doc(
             "d.md",
-            &[("type", s("decision")), ("id", s("d1")), ("project", s("studio-a"))],
+            &[
+                ("type", s("decision")),
+                ("id", s("d1")),
+                ("project", s("studio-a")),
+            ],
         )]);
-        let filter = ListFilter { projects: vec!["zzzz".into()], ..ListFilter::default() };
+        let filter = ListFilter {
+            projects: vec!["zzzz".into()],
+            ..ListFilter::default()
+        };
         assert!(list(&g, "decision", &filter).is_empty());
     }
 
     #[test]
     fn global_decisions_have_no_project() {
-        let g = graph_of(vec![doc("d.md", &[("type", s("decision")), ("id", s("d1"))])]);
+        let g = graph_of(vec![doc(
+            "d.md",
+            &[("type", s("decision")), ("id", s("d1"))],
+        )]);
         let shown = list(&g, "decision", &ListFilter::default());
         assert_eq!(shown.len(), 1);
         assert!(shown[0].project.is_none());
@@ -596,10 +733,20 @@ mod tests {
     #[test]
     fn star_wildcard_means_every_project() {
         let g = graph_of(vec![
-            doc("d1.md", &[("type", s("decision")), ("id", s("d1")), ("project", s("a"))]),
+            doc(
+                "d1.md",
+                &[
+                    ("type", s("decision")),
+                    ("id", s("d1")),
+                    ("project", s("a")),
+                ],
+            ),
             doc("d2.md", &[("type", s("decision")), ("id", s("d2"))]),
         ]);
-        let filter = ListFilter { projects: vec!["*".into()], ..ListFilter::default() };
+        let filter = ListFilter {
+            projects: vec!["*".into()],
+            ..ListFilter::default()
+        };
         assert_eq!(list(&g, "decision", &filter).len(), 2);
     }
 
@@ -649,18 +796,40 @@ mod tests {
     #[test]
     fn limit_truncates_results() {
         let docs = (0..5)
-            .map(|i| doc(&format!("d{i}.md"), &[("type", s("decision")), ("id", s(&format!("d{i}")))]))
+            .map(|i| {
+                doc(
+                    &format!("d{i}.md"),
+                    &[("type", s("decision")), ("id", s(&format!("d{i}")))],
+                )
+            })
             .collect();
         let g = graph_of(docs);
-        let filter = ListFilter { limit: 2, ..ListFilter::default() };
+        let filter = ListFilter {
+            limit: 2,
+            ..ListFilter::default()
+        };
         assert_eq!(list(&g, "decision", &filter).len(), 2);
     }
 
     #[test]
     fn contexts_default_hides_archived() {
         let g = graph_of(vec![
-            doc("c1.md", &[("type", s("context")), ("id", s("c1")), ("status", s("active"))]),
-            doc("c2.md", &[("type", s("context")), ("id", s("c2")), ("status", s("archived"))]),
+            doc(
+                "c1.md",
+                &[
+                    ("type", s("context")),
+                    ("id", s("c1")),
+                    ("status", s("active")),
+                ],
+            ),
+            doc(
+                "c2.md",
+                &[
+                    ("type", s("context")),
+                    ("id", s("c2")),
+                    ("status", s("archived")),
+                ],
+            ),
         ]);
         assert_eq!(list(&g, "context", &ListFilter::default()).len(), 1);
     }
@@ -668,16 +837,40 @@ mod tests {
     #[test]
     fn projects_default_hides_completed_and_archived() {
         let g = graph_of(vec![
-            doc("p1.md", &[("type", s("project")), ("id", s("p1")), ("status", s("active"))]),
-            doc("p2.md", &[("type", s("project")), ("id", s("p2")), ("status", s("paused"))]),
-            doc("p3.md", &[("type", s("project")), ("id", s("p3")), ("status", s("completed"))]),
+            doc(
+                "p1.md",
+                &[
+                    ("type", s("project")),
+                    ("id", s("p1")),
+                    ("status", s("active")),
+                ],
+            ),
+            doc(
+                "p2.md",
+                &[
+                    ("type", s("project")),
+                    ("id", s("p2")),
+                    ("status", s("paused")),
+                ],
+            ),
+            doc(
+                "p3.md",
+                &[
+                    ("type", s("project")),
+                    ("id", s("p3")),
+                    ("status", s("completed")),
+                ],
+            ),
         ]);
         assert_eq!(list(&g, "project", &ListFilter::default()).len(), 2);
     }
 
     #[test]
     fn missing_status_defaults_to_active() {
-        let g = graph_of(vec![doc("p1.md", &[("type", s("project")), ("id", s("p1"))])]);
+        let g = graph_of(vec![doc(
+            "p1.md",
+            &[("type", s("project")), ("id", s("p1"))],
+        )]);
         assert_eq!(g.notes[0].effective_status(), "active");
     }
 }

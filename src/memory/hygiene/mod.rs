@@ -353,7 +353,8 @@ impl SearchEngine {
                 "FACT",
             ));
         }
-        let project_ids: std::collections::HashSet<&str> = graph.project_ids().into_iter().collect();
+        let project_ids: std::collections::HashSet<&str> =
+            graph.project_ids().into_iter().collect();
         for n in &graph.notes {
             if n.note_type == "project" {
                 continue;

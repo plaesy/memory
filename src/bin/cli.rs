@@ -24,9 +24,7 @@ use plaesy::memory::search::{
 };
 use plaesy::memory::serve::Transport;
 use plaesy::memory::service::SearchHit;
-use plaesy::memory::{
-    self, init_logging_with, onboard, serve, settings, MemoryError, Result,
-};
+use plaesy::memory::{self, init_logging_with, onboard, serve, settings, MemoryError, Result};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -811,12 +809,12 @@ async fn run(cli: Cli) -> Result<()> {
                 None => {
                     use std::io::Read;
                     let mut buf = String::new();
-                    std::io::stdin()
-                        .read_to_string(&mut buf)
-                        .map_err(|e| MemoryError::IoError {
+                    std::io::stdin().read_to_string(&mut buf).map_err(|e| {
+                        MemoryError::IoError {
                             path: "<stdin>".into(),
                             source: e,
-                        })?;
+                        }
+                    })?;
                     buf
                 }
             };
@@ -880,7 +878,11 @@ fn validate_projects_filter(
     Ok(())
 }
 
-fn print_projects(graph: &plaesy::memory::graph::Graph, include_inactive: bool, format: GraphFormat) {
+fn print_projects(
+    graph: &plaesy::memory::graph::Graph,
+    include_inactive: bool,
+    format: GraphFormat,
+) {
     let filter = plaesy::memory::graph::ListFilter {
         include_inactive,
         limit: usize::MAX,
@@ -895,8 +897,16 @@ fn print_projects(graph: &plaesy::memory::graph::Graph, include_inactive: bool, 
                 return;
             }
             for p in items {
-                let decisions = graph.of_type("decision").iter().filter(|d| d.belongs_to(&p.id)).count();
-                let contexts = graph.of_type("context").iter().filter(|c| c.belongs_to(&p.id)).count();
+                let decisions = graph
+                    .of_type("decision")
+                    .iter()
+                    .filter(|d| d.belongs_to(&p.id))
+                    .count();
+                let contexts = graph
+                    .of_type("context")
+                    .iter()
+                    .filter(|c| c.belongs_to(&p.id))
+                    .count();
                 println!(
                     "{:<24} {:<10} {:<28} decisions={decisions} contexts={contexts}",
                     p.id,
@@ -921,8 +931,16 @@ fn print_project_detail(
     use plaesy::memory::graph::Resolved;
     match plaesy::memory::graph::resolve_project(graph, id) {
         Resolved::Found(p) => {
-            let decisions: Vec<_> = graph.of_type("decision").into_iter().filter(|d| d.belongs_to(&p.id)).collect();
-            let contexts: Vec<_> = graph.of_type("context").into_iter().filter(|c| c.belongs_to(&p.id)).collect();
+            let decisions: Vec<_> = graph
+                .of_type("decision")
+                .into_iter()
+                .filter(|d| d.belongs_to(&p.id))
+                .collect();
+            let contexts: Vec<_> = graph
+                .of_type("context")
+                .into_iter()
+                .filter(|c| c.belongs_to(&p.id))
+                .collect();
             match format {
                 GraphFormat::Json => print_json(&serde_json::json!({
                     "id": p.id, "title": p.title, "status": p.effective_status(),
@@ -965,12 +983,18 @@ fn print_project_scoped(
 ) -> Result<()> {
     use plaesy::memory::graph::{ListFilter, Resolved};
     let (note_type, include_inactive, status, limit, format) = match sub {
-        ProjectsSubcommand::Decisions { include_inactive, status, limit, format } => {
-            ("decision", include_inactive, status, limit, format)
-        }
-        ProjectsSubcommand::Contexts { include_inactive, status, limit, format } => {
-            ("context", include_inactive, status, limit, format)
-        }
+        ProjectsSubcommand::Decisions {
+            include_inactive,
+            status,
+            limit,
+            format,
+        } => ("decision", include_inactive, status, limit, format),
+        ProjectsSubcommand::Contexts {
+            include_inactive,
+            status,
+            limit,
+            format,
+        } => ("context", include_inactive, status, limit, format),
     };
     let projects = if id == "*" {
         Vec::new() // no restriction: same as the unfiltered global command
@@ -986,7 +1010,9 @@ fn print_project_scoped(
             }
             Resolved::NotFound { query, suggestions } => {
                 return Err(MemoryError::ConfigError(if suggestions.is_empty() {
-                    format!("no project found with id \"{query}\". Run `memory projects` to list all.")
+                    format!(
+                        "no project found with id \"{query}\". Run `memory projects` to list all."
+                    )
                 } else {
                     format!(
                         "no project found with id \"{query}\". Did you mean: {}? Run `memory projects` to list all.",
@@ -996,7 +1022,12 @@ fn print_project_scoped(
             }
         }
     };
-    let filter = ListFilter { projects, status, include_inactive, limit };
+    let filter = ListFilter {
+        projects,
+        status,
+        include_inactive,
+        limit,
+    };
     match note_type {
         "decision" => print_decision_list(graph, &filter, format),
         _ => print_context_list(graph, &filter, format),
@@ -1004,18 +1035,23 @@ fn print_project_scoped(
     Ok(())
 }
 
-fn print_decision_list(graph: &plaesy::memory::graph::Graph, filter: &plaesy::memory::graph::ListFilter, format: GraphFormat) {
+fn print_decision_list(
+    graph: &plaesy::memory::graph::Graph,
+    filter: &plaesy::memory::graph::ListFilter,
+    format: GraphFormat,
+) {
     let items = plaesy::memory::graph::list(graph, "decision", filter);
     let (conflicts, superseded_by) = plaesy::memory::graph::supersession_map(graph);
     match format {
         GraphFormat::Json => print_json(&items),
         GraphFormat::Text => {
             if items.is_empty() {
-                let scope = if filter.projects.is_empty() || filter.projects.iter().any(|p| p == "*") {
-                    "".to_string()
-                } else {
-                    format!(" for project \"{}\"", filter.projects.join(", "))
-                };
+                let scope =
+                    if filter.projects.is_empty() || filter.projects.iter().any(|p| p == "*") {
+                        "".to_string()
+                    } else {
+                        format!(" for project \"{}\"", filter.projects.join(", "))
+                    };
                 println!("No decisions{scope}.");
                 return;
             }
@@ -1044,7 +1080,11 @@ fn print_decision_list(graph: &plaesy::memory::graph::Graph, filter: &plaesy::me
     }
 }
 
-fn print_context_list(graph: &plaesy::memory::graph::Graph, filter: &plaesy::memory::graph::ListFilter, format: GraphFormat) {
+fn print_context_list(
+    graph: &plaesy::memory::graph::Graph,
+    filter: &plaesy::memory::graph::ListFilter,
+    format: GraphFormat,
+) {
     let items = plaesy::memory::graph::list(graph, "context", filter);
     match format {
         GraphFormat::Json => print_json(&items),

@@ -50,11 +50,11 @@ pub mod rerank;
 use crate::memory::config::{MemoryConfig, SearchConfig};
 use crate::memory::embeddings::{EmbeddingBackend, EmbeddingEngine, EmbeddingVector};
 use crate::memory::error::{MemoryError, Result};
-use crate::memory::search::rerank::{sigmoid, CrossEncoder};
 use crate::memory::indexer::{
     is_excluded, is_indexable, scan_dir, Chunker, Document, EventKind, Extractor, FileEvent,
 };
 use crate::memory::metrics::{IndexHealth, Metrics, SearchType, Timer};
+use crate::memory::search::rerank::{sigmoid, CrossEncoder};
 use crate::memory::storage::{
     ConfidenceLevel, Database, DatabaseStats, HnswIndex, ResultMeta, SearchResult,
 };

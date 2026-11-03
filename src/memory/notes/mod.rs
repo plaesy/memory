@@ -8,7 +8,8 @@ use crate::memory::error::{MemoryError, Result};
 use crate::memory::search::{SearchEngine, TIERS};
 use chrono::{NaiveDate, Utc};
 use std::io::Write;
-use std::path::{Component, PathBuf};
+use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
 
 /// Confidence values a note may declare.
 pub const CONFIDENCE: [&str; 3] = ["high", "medium", "low"];
@@ -124,6 +125,56 @@ pub fn default_inbox(root: &std::path::Path) -> PathBuf {
     }
 }
 
+/// A best-effort cross-process lock for the remember write path.
+///
+/// The graph preflight and file admission must be serialized: separate processes have separate
+/// SQLite connections and can otherwise both pass the duplicate-id check. A lock directory is
+/// created atomically by the OS, so it also works when several CLI processes race.
+struct RememberLock {
+    path: PathBuf,
+}
+
+impl RememberLock {
+    fn acquire(root: &Path) -> Result<Self> {
+        let path = root.join(".plaesy-remember.lock");
+        for _ in 0..200 {
+            match std::fs::create_dir(&path) {
+                Ok(()) => return Ok(Self { path }),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    // A crashed writer must not permanently disable memory. Only reclaim a lock
+                    // whose directory has been untouched for ten minutes.
+                    let stale = std::fs::metadata(&path)
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .and_then(|t| t.elapsed().ok())
+                        .map(|age| age > Duration::from_secs(600))
+                        .unwrap_or(false);
+                    if stale {
+                        let _ = std::fs::remove_dir(&path);
+                        continue;
+                    }
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+                Err(e) => {
+                    return Err(MemoryError::IoError {
+                        path: path.display().to_string(),
+                        source: e,
+                    })
+                }
+            }
+        }
+        Err(MemoryError::ConfigError(
+            "another memory write is still in progress".into(),
+        ))
+    }
+}
+
+impl Drop for RememberLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir(&self.path);
+    }
+}
+
 /// Front matter and body of a new note.
 pub fn render(note: &NewNote, today: NaiveDate) -> String {
     // serde_json::to_string on a &str produces a double-quoted, properly escaped string that
@@ -213,6 +264,9 @@ impl SearchEngine {
                 note.confidence
             )));
         }
+        // Serialize the graph preflight with file admission across CLI processes. Without this,
+        // two writers can both observe an unused graph id and create duplicate IDs.
+        let _write_lock = RememberLock::acquire(&root)?;
         if let Some(g) = &note.graph {
             if !crate::memory::graph::NOTE_TYPES.contains(&g.note_type.as_str()) {
                 return Err(MemoryError::ConfigError(format!(
@@ -531,7 +585,10 @@ mod tests {
                 supersedes: vec![],
             }),
         };
-        let err = engine.remember(&second).await.expect_err("duplicate id rejected");
+        let err = engine
+            .remember(&second)
+            .await
+            .expect_err("duplicate id rejected");
         assert!(err.to_string().contains("dup-id"));
     }
 
@@ -554,7 +611,10 @@ mod tests {
                 supersedes: vec!["self-1".into()],
             }),
         };
-        let err = engine.remember(&note).await.expect_err("self-supersede rejected");
+        let err = engine
+            .remember(&note)
+            .await
+            .expect_err("self-supersede rejected");
         assert!(err.to_string().contains("supersede itself"));
     }
 
