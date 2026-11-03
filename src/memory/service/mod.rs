@@ -146,6 +146,25 @@ pub async fn handle_request(engine: &SearchEngine, req: Request) -> Response {
     }
 }
 
+const MAX_REQUEST_LIMIT: u64 = 1_000;
+
+fn request_limit(params: &Value, default: u64) -> std::result::Result<usize, DispatchError> {
+    let raw = match params.get("limit") {
+        None => default,
+        Some(value) => value.as_u64().ok_or_else(|| {
+            DispatchError::BadRequest("params.limit must be a non-negative integer".into())
+        })?,
+    };
+    if raw == 0 || raw > MAX_REQUEST_LIMIT {
+        return Err(DispatchError::BadRequest(format!(
+            "params.limit must be between 1 and {MAX_REQUEST_LIMIT}"
+        )));
+    }
+    usize::try_from(raw).map_err(|_| {
+        DispatchError::BadRequest("params.limit is too large for this platform".into())
+    })
+}
+
 enum DispatchError {
     BadRequest(String),
     Engine(MemoryError),
@@ -171,18 +190,7 @@ async fn dispatch(
                 .ok_or_else(|| {
                     DispatchError::BadRequest("params.query (string) is required".into())
                 })?;
-            let limit = req
-                .params
-                .get("limit")
-                .map(|v| {
-                    v.as_u64().map(|n| n as usize).ok_or_else(|| {
-                        DispatchError::BadRequest(
-                            "params.limit must be a non-negative integer".into(),
-                        )
-                    })
-                })
-                .transpose()?
-                .unwrap_or(10);
+            let limit = request_limit(&req.params, 10)?;
             let mode_name = req
                 .params
                 .get("mode")
@@ -212,11 +220,7 @@ async fn dispatch(
             Ok(json!({ "hits": hits }))
         }
         "missing" => {
-            let limit = req
-                .params
-                .get("limit")
-                .and_then(Value::as_u64)
-                .unwrap_or(20) as usize;
+            let limit = request_limit(&req.params, 20)?;
             let root = req
                 .params
                 .get("root")
@@ -472,6 +476,33 @@ mod tests {
         );
         assert_eq!(r[0].id, Value::Null);
         assert_eq!(r[6].result.as_ref().expect("pong")["pong"], true);
+    }
+
+    #[tokio::test]
+    async fn test_limits_are_bounded_and_type_checked() {
+        let (e, _d) = engine_with_doc().await;
+        for limit in [0, 1001] {
+            let req = Request {
+                id: json!(1),
+                method: "search".into(),
+                params: json!({"query": "x", "limit": limit}),
+            };
+            let response = handle_request(&e, req).await;
+            assert_eq!(response.error.expect("bad request").kind, "bad_request");
+        }
+        let req = Request {
+            id: json!(2),
+            method: "search".into(),
+            params: json!({"query": "x", "limit": "100"}),
+        };
+        assert_eq!(
+            handle_request(&e, req)
+                .await
+                .error
+                .expect("bad request")
+                .kind,
+            "bad_request"
+        );
     }
 
     #[tokio::test]

@@ -405,10 +405,18 @@ class PlaesyMemoryProvider(MemoryProvider):
     def handle_tool_call(self, tool_name: str, args: dict[str, Any], **kwargs: Any) -> str:
         try:
             if tool_name == "plaesy_memory_search":
-                query = str(args.get("query", "")).strip()
+                raw_query = args.get("query", "")
+                if not isinstance(raw_query, str):
+                    return json.dumps({"error": "query must be a string"})
+                query = raw_query.strip()
                 if not query:
                     return json.dumps({"error": "query is required"})
-                limit = max(1, min(int(args.get("limit", 5)), 50))
+                raw_limit = args.get("limit", 5)
+                if isinstance(raw_limit, bool) or not isinstance(raw_limit, (int, float)):
+                    return json.dumps({"error": "limit must be an integer"})
+                if isinstance(raw_limit, float) and not raw_limit.is_integer():
+                    return json.dumps({"error": "limit must be an integer"})
+                limit = max(1, min(int(raw_limit), 50))
                 hits = self._search(
                     query,
                     limit,
@@ -422,8 +430,11 @@ class PlaesyMemoryProvider(MemoryProvider):
                 return json.dumps({"count": len(hits), "results": format_hits(hits) or "No results."})
             if tool_name == "plaesy_memory_backlinks":
                 assert self._client is not None
+                raw_path = args.get("path", "")
+                if not isinstance(raw_path, str) or not raw_path.strip():
+                    return json.dumps({"error": "path is required"})
                 method = "links" if args.get("direction") == "outgoing" else "backlinks"
-                return json.dumps(self._client.call(method, {"path": str(args.get("path", ""))}))
+                return json.dumps(self._client.call(method, {"path": raw_path.strip()}))
             if tool_name == "plaesy_memory_hygiene":
                 assert self._client is not None
                 return json.dumps(self._client.call("hygiene"))
