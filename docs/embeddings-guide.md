@@ -45,7 +45,7 @@ plaesy-memory uses embeddings for semantic search: text with similar meaning to 
 MEMORY_MODEL_NAME=all-MiniLM-L6-v2
 ```
 
-Model downloaded to `%LOCALAPPDATA%/plaesy/models/` (Windows) or `~/.local/share/plaesy/models` (Linux/macOS).
+Model downloaded to `%LOCALAPPDATA%/plaesy/models/` (Windows), `~/.cache/plaesy/models/` (Linux), or `~/Library/Caches/plaesy/models/` (macOS). Override with `PLAESY_MODEL_DIR`.
 
 ### Multilingual: multilingual-e5-small
 

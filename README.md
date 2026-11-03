@@ -156,7 +156,7 @@ The stdio protocol serves one request at a time per process, so no concurrent-lo
 
 | What                                                  | Result                                                                                                                                                                        |
 | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Tests                                                 | 129 Rust tests (`cargo test`, all targets) + 7 Python shim tests (`make test-plugin`); real-ONNX tests run when models are installed. Counted 2026-10-20                  |
+| Tests                                                 | 206 Rust tests (`cargo test --all-targets`) passed with the default ONNX model installed; integration tests and benchmarks passed. Python shim count/evidence remains from the earlier `make test-plugin` run. |
 | Lint                                                  | `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` clean                                                                                                 |
 | 20-doc/20-query labeled set (`make eval`)           | keyword 1.00 / 0.70 (lexical / paraphrase R@3) · semantic 1.00 / 1.00 · hybrid 1.00 / 1.00 (saturated; a regression guard only)                                             |
 | Cold start, 4.6K chunks                               | 0.37 s with HNSW snapshot (was ~4 s)                                                                                                                                          |
