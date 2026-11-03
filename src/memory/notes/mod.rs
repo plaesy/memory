@@ -240,6 +240,24 @@ impl SearchEngine {
                     )));
                 }
             }
+            // A decision cannot supersede itself: that would be a self-referencing cycle, not a
+            // legitimate replacement, and nothing downstream would otherwise catch it.
+            if g.supersedes.iter().any(|s| s == &g.id) {
+                return Err(MemoryError::ConfigError(format!(
+                    "decision '{}' cannot supersede itself",
+                    g.id
+                )));
+            }
+            // Two notes (any type) declaring the same id make every id lookup ambiguous: the
+            // first match silently wins and every other claimant becomes invisible. Reject at
+            // write time rather than letting it surface later as a silent lookup bug.
+            let graph = crate::memory::graph::load_graph(&self.database()).await?;
+            if let Some(existing) = graph.notes.iter().find(|n| n.id == g.id) {
+                return Err(MemoryError::ConfigError(format!(
+                    "id '{}' is already used by {}",
+                    g.id, existing.path
+                )));
+            }
         }
         let rel = if note.folder.trim().is_empty() {
             default_inbox(&root)
@@ -476,6 +494,68 @@ mod tests {
             .await
             .expect("graph loads");
         assert!(graph.notes.iter().any(|n| n.id == "studio-c"));
+    }
+
+    #[tokio::test]
+    async fn remember_rejects_duplicate_graph_id() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let engine = engine(dir.path()).await;
+        let first = NewNote {
+            folder: "01. Projects".into(),
+            title: "Studio D".into(),
+            body: "First.".into(),
+            tier: "semantic".into(),
+            confidence: "medium".into(),
+            graph: Some(GraphFields {
+                note_type: "project".into(),
+                id: "dup-id".into(),
+                status: Some("active".into()),
+                project: None,
+                scope: vec![],
+                supersedes: vec![],
+            }),
+        };
+        engine.remember(&first).await.expect("first saved");
+        let second = NewNote {
+            folder: "01. Projects".into(),
+            title: "Studio E".into(),
+            body: "Second, different title, same id.".into(),
+            tier: "semantic".into(),
+            confidence: "medium".into(),
+            graph: Some(GraphFields {
+                note_type: "project".into(),
+                id: "dup-id".into(),
+                status: Some("active".into()),
+                project: None,
+                scope: vec![],
+                supersedes: vec![],
+            }),
+        };
+        let err = engine.remember(&second).await.expect_err("duplicate id rejected");
+        assert!(err.to_string().contains("dup-id"));
+    }
+
+    #[tokio::test]
+    async fn remember_rejects_self_superseding_decision() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let engine = engine(dir.path()).await;
+        let note = NewNote {
+            folder: "02. Areas".into(),
+            title: "Self Ref".into(),
+            body: "Supersedes itself.".into(),
+            tier: "semantic".into(),
+            confidence: "medium".into(),
+            graph: Some(GraphFields {
+                note_type: "decision".into(),
+                id: "self-1".into(),
+                status: None,
+                project: None,
+                scope: vec![],
+                supersedes: vec!["self-1".into()],
+            }),
+        };
+        let err = engine.remember(&note).await.expect_err("self-supersede rejected");
+        assert!(err.to_string().contains("supersede itself"));
     }
 
     #[tokio::test]

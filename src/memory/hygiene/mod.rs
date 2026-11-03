@@ -396,6 +396,46 @@ impl SearchEngine {
             ));
         }
 
+        // Duplicate `id`: two notes (any type) declaring the same id mean lookups such as
+        // `resolve_project` silently pick whichever one they see first — every other claimant
+        // is invisible to callers with no error raised anywhere in the write path.
+        let mut by_id: std::collections::HashMap<&str, Vec<&crate::memory::graph::GraphNote>> =
+            std::collections::HashMap::new();
+        for n in &graph.notes {
+            by_id.entry(n.id.as_str()).or_default().push(n);
+        }
+        for (id, notes) in &by_id {
+            if notes.len() > 1 {
+                let paths: Vec<&str> = notes.iter().map(|n| n.path.as_str()).collect();
+                findings.push(finding(
+                    "duplicate_graph_id",
+                    paths[0],
+                    None,
+                    format!(
+                        "id '{id}' is declared by {} notes: {}",
+                        notes.len(),
+                        paths.join(", ")
+                    ),
+                    "FACT",
+                ));
+            }
+        }
+
+        // A decision that lists its own id in `supersedes` is a self-referencing cycle: it can
+        // never be a legitimate replacement for itself, and it would make `supersession_map`
+        // report the decision as superseding itself with no warning otherwise.
+        for n in graph.of_type("decision") {
+            if n.supersedes.iter().any(|s| s == &n.id) {
+                findings.push(finding(
+                    "self_superseding_decision",
+                    &n.path,
+                    None,
+                    format!("decision '{}' lists itself in `supersedes`", n.id),
+                    "FACT",
+                ));
+            }
+        }
+
         findings.sort_by(|a, b| {
             (a.path.as_str(), a.line, a.kind.as_str()).cmp(&(
                 b.path.as_str(),

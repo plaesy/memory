@@ -281,3 +281,64 @@ async fn hygiene_reports_each_problem_kind() {
     // old-deploy (2025) and stale-deploy (2020) are both past the 180-day window.
     assert_eq!(report.summary.get("stale"), Some(&2));
 }
+
+#[tokio::test]
+async fn hygiene_reports_duplicate_graph_id_and_self_superseding_decision() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let t = today();
+    write(
+        dir.path(),
+        "projects/a.md",
+        &format!(
+            "---\ntier: semantic\nconfidence: high\nlast_verified: {t}\ntype: \"project\"\nid: \"dup-project\"\nstatus: \"active\"\n---\n# Project A\n\nFirst note with this id.\n"
+        ),
+    );
+    write(
+        dir.path(),
+        "projects/b.md",
+        &format!(
+            "---\ntier: semantic\nconfidence: high\nlast_verified: {t}\ntype: \"project\"\nid: \"dup-project\"\nstatus: \"active\"\n---\n# Project B\n\nSecond note, same id, written outside the `remember` CLI path.\n"
+        ),
+    );
+    write(
+        dir.path(),
+        "decisions/self.md",
+        &format!(
+            "---\ntier: semantic\nconfidence: high\nlast_verified: {t}\ntype: \"decision\"\nid: \"self-ref\"\nsupersedes: [\"self-ref\"]\n---\n# Self Ref\n\nClaims to supersede itself.\n"
+        ),
+    );
+    let db = Arc::new(
+        Database::new(DatabaseConfig {
+            db_path: PathBuf::from(":memory:"),
+            ..DatabaseConfig::default()
+        })
+        .await
+        .expect("db"),
+    );
+    let e = SearchEngine::new(db, None, SearchConfig::default())
+        .await
+        .expect("engine");
+    e.index_directory(dir.path()).await.expect("index");
+    let report = e
+        .hygiene(&HygieneOptions {
+            root: Some(dir.path().to_path_buf()),
+            ..HygieneOptions::default()
+        })
+        .await
+        .expect("hygiene");
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| f.kind == "duplicate_graph_id" && f.detail.contains("dup-project")),
+        "a duplicate id written outside `remember` (e.g. by hand, or by a future auto-capture \
+         path) must still be caught by hygiene, not just rejected at write time"
+    );
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| f.kind == "self_superseding_decision" && f.path == "decisions/self.md"),
+        "a decision that lists its own id in `supersedes` must be flagged"
+    );
+}
