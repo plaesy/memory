@@ -13,6 +13,7 @@
 - **No network at runtime**: All models downloaded once; no API calls, no cloud dependencies
 - **Watch mode**: Debounced file-system monitoring for incremental index updates
 - **Multiple protocols**: Library (Rust), line-delimited JSON (Hermes shim), MCP server (Claude Code, Cursor, Kilo Code)
+- **Cross-agent memory graph**: opt-in `type: project/decision/context` frontmatter lets every agent sharing this vault read and write the same projects, decisions, and contexts — see [`docs/graph.md`](./graph.md)
 
 **Main technologies**:
 
