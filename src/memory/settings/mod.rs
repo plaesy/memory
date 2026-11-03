@@ -101,8 +101,21 @@ fn root_from(env_root: Option<PathBuf>, platform: Option<PathBuf>) -> Option<Pat
 ///
 /// - `ConfigError` if the file exists but is not valid settings JSON
 pub fn load(path: &Path) -> Result<Option<Settings>> {
-    if !path.is_file() {
-        return Ok(None);
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(MemoryError::ConfigError(format!(
+                "cannot inspect {}: {error}",
+                path.display()
+            )))
+        }
+    };
+    if !metadata.file_type().is_file() {
+        return Err(MemoryError::ConfigError(format!(
+            "settings path is not a regular file: {}",
+            path.display()
+        )));
     }
     let text = std::fs::read_to_string(path)
         .map_err(|e| MemoryError::ConfigError(format!("cannot read {}: {e}", path.display())))?;
@@ -125,8 +138,33 @@ pub fn save(path: &Path, settings: &Settings) -> Result<()> {
     }
     let text = serde_json::to_string_pretty(settings)
         .map_err(|e| MemoryError::SerializationError(e.to_string()))?;
-    std::fs::write(path, text + "\n")
-        .map_err(|e| MemoryError::ConfigError(format!("cannot write {}: {e}", path.display())))
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            MemoryError::ConfigError(format!("invalid settings path: {}", path.display()))
+        })?;
+    let tmp = parent.join(format!(".{file_name}.tmp-{}", std::process::id()));
+    let result = (|| -> std::io::Result<()> {
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)?;
+        file.write_all((text + "\n").as_bytes())?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&tmp, path)?;
+        if let Ok(dir) = std::fs::File::open(parent) {
+            let _ = dir.sync_all();
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result.map_err(|e| MemoryError::ConfigError(format!("cannot write {}: {e}", path.display())))
 }
 
 #[cfg(test)]
@@ -172,5 +210,29 @@ mod tests {
     fn unset_fields_are_not_written() {
         let text = serde_json::to_string(&Settings::default()).unwrap();
         assert_eq!(text, format!("{{\"version\":{SETTINGS_VERSION}}}"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_settings_path_is_rejected_on_load_and_replaced_on_save() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("outside.json");
+        std::fs::write(&target, "{\"version\":1}\n").unwrap();
+        let path = dir.path().join("settings.json");
+        symlink(&target, &path).unwrap();
+
+        assert!(load(&path).is_err());
+        save(&path, &Settings::default()).unwrap();
+        assert!(!std::fs::symlink_metadata(&path)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "{\"version\":1}\n"
+        );
+        assert_eq!(load(&path).unwrap(), Some(Settings::default()));
     }
 }
