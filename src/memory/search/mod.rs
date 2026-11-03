@@ -588,6 +588,25 @@ impl SearchEngine {
         let _process_lock = WriteLock::acquire(root)?;
         reconcile_stale_temp_files(root);
         let mut summary = IndexSummary::default();
+        // Replay durable note-publication work before the regular scan. This closes the window
+        // between Markdown publication and SQLite/HNSW indexing across process crashes.
+        for relative in self.db.pending_indexes().await? {
+            let candidate = root.join(&relative);
+            if candidate.is_file() {
+                match self.index_file_at(root, &candidate, None).await {
+                    Ok(_) => {
+                        self.db.dequeue_index(&relative).await?;
+                    }
+                    Err(e) => {
+                        tracing::warn!("outbox replay failed for {relative}: {e}");
+                    }
+                }
+            } else {
+                // The file was removed after enqueue; it cannot be replayed, so discard the
+                // stale work item and let the normal removal reconciliation handle the index.
+                self.db.dequeue_index(&relative).await?;
+            }
+        }
         let files: Vec<PathBuf> = scan_dir(root)
             .into_iter()
             .filter(|f| !is_excluded(root, f, &self.config.exclude_dirs))

@@ -467,7 +467,16 @@ impl SearchEngine {
                 source: e,
             });
         }
+        let relative = path
+            .strip_prefix(&root)
+            .map_err(|_| MemoryError::ConfigError("published note escaped notes root".into()))?
+            .to_string_lossy()
+            .replace('\\', "/");
+        // The outbox is durable before indexing starts. If the process dies after publication
+        // (or during SQLite/HNSW replacement), startup reconciliation replays this path.
+        self.database().enqueue_index(&relative).await?;
         self.index_file_at(&root, &path, None).await?;
+        self.database().dequeue_index(&relative).await?;
         Ok(path)
     }
 }
