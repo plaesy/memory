@@ -912,6 +912,19 @@ impl Database {
         .map_err(db_err)
     }
 
+    /// Sorted IDs of all chunks that have a stored embedding.
+    /// This identity manifest is used to validate the persisted HNSW cache.
+    pub async fn embedding_ids(&self) -> Result<Vec<u64>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn
+            .prepare("SELECT id FROM chunks WHERE embedding IS NOT NULL ORDER BY id")
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, i64>(0).map(|id| id as u64))
+            .map_err(db_err)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(db_err)
+    }
+
     /// Number of chunks that have a stored embedding.
     pub async fn embedding_count(&self) -> Result<u64> {
         let conn = self.conn.lock();

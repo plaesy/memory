@@ -226,8 +226,12 @@ impl SearchEngine {
             return None;
         }
         let index = HnswIndex::load(&path).ok()?;
-        let stored = db.embedding_count().await.ok()?;
-        (index.dimensions() == dim && index.len() as u64 == stored).then_some(index)
+        let stored_ids = db.embedding_ids().await.ok()?;
+        let ids_file = path.with_extension("hnsw.ids");
+        let saved_ids: Vec<u64> =
+            serde_json::from_str(&std::fs::read_to_string(ids_file).ok()?).ok()?;
+        (index.dimensions() == dim && index.len() == stored_ids.len() && saved_ids == stored_ids)
+            .then_some(index)
     }
 
     /// Persist the HNSW index next to the database so the next start skips the rebuild.
@@ -254,6 +258,11 @@ impl SearchEngine {
         };
         let marker = path.with_extension("hnsw.gen");
         let marker_tmp = marker.with_extension(format!("gen.tmp-{}", std::process::id()));
+        let ids_path = path.with_extension("hnsw.ids");
+        let ids_tmp = ids_path.with_extension(format!("ids.tmp-{}", std::process::id()));
+        let Ok(embedding_ids) = self.db.embedding_ids().await else {
+            return;
+        };
         let saved = {
             let h = self.hnsw.read();
             h.save(&tmp)
@@ -266,9 +275,16 @@ impl SearchEngine {
                         p.push(".meta.json");
                         PathBuf::from(p)
                     };
-                    // Replace the data and metadata as complete files, then publish generation.
+                    // Replace the data, metadata, and identity manifest as complete files,
+                    // then publish generation last.
                     std::fs::rename(&tmp, &path)?;
                     std::fs::rename(&tmp_meta, &meta)?;
+                    std::fs::write(
+                        &ids_tmp,
+                        serde_json::to_vec(&embedding_ids)
+                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?,
+                    )?;
+                    std::fs::rename(&ids_tmp, &ids_path)?;
                     std::fs::write(&marker_tmp, generation.to_string())?;
                     std::fs::rename(&marker_tmp, &marker)?;
                     Ok(())
@@ -279,6 +295,7 @@ impl SearchEngine {
                 } else {
                     let _ = std::fs::remove_file(&tmp);
                     let _ = std::fs::remove_file(&tmp_meta);
+                    let _ = std::fs::remove_file(&ids_tmp);
                     let _ = std::fs::remove_file(&marker_tmp);
                     tracing::warn!("could not atomically publish HNSW snapshot");
                 }
