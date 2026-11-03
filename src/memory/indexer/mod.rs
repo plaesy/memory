@@ -346,10 +346,30 @@ impl Extractor {
     /// Invalid frontmatter is not an error here: the file is extracted with
     /// [`Extractor::extract_plain`] so it stays searchable.
     pub fn extract_file(&self, path: &Path) -> Result<Document> {
+        let before = std::fs::symlink_metadata(path).map_err(|e| MemoryError::IoError {
+            path: path.display().to_string(),
+            source: e,
+        })?;
+        if !before.file_type().is_file() {
+            return Err(MemoryError::ConfigError(format!(
+                "cannot index non-regular file: {}",
+                path.display()
+            )));
+        }
         let content = std::fs::read_to_string(path).map_err(|e| MemoryError::IoError {
             path: path.display().to_string(),
             source: e,
         })?;
+        let after = std::fs::symlink_metadata(path).map_err(|e| MemoryError::IoError {
+            path: path.display().to_string(),
+            source: e,
+        })?;
+        if !after.file_type().is_file() || before.len() != after.len() {
+            return Err(MemoryError::ConfigError(format!(
+                "file changed while reading: {}",
+                path.display()
+            )));
+        }
         match self.extract(path.to_path_buf(), &content) {
             Err(MemoryError::YamlError { reason, .. }) => {
                 tracing::warn!(
@@ -921,6 +941,34 @@ mod tests {
     fn test_hash_changes_with_content() {
         assert_ne!(extract("a").hash, extract("b").hash);
         assert_eq!(extract("a").hash, extract("a").hash);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn extract_file_rejects_symlink_and_non_regular_paths() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().expect("tmp");
+        let target = dir.path().join("outside.md");
+        std::fs::write(&target, "secret").expect("target");
+        let link = dir.path().join("link.md");
+        symlink(&target, &link).expect("symlink");
+        assert!(Extractor::new().extract_file(&link).is_err());
+
+        let subdir = dir.path().join("folder.md");
+        std::fs::create_dir(&subdir).expect("directory");
+        assert!(Extractor::new().extract_file(&subdir).is_err());
+    }
+
+    #[test]
+    fn extract_file_reads_regular_file() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let path = dir.path().join("note.md");
+        std::fs::write(&path, "hello").expect("note");
+        assert_eq!(
+            Extractor::new().extract_file(&path).expect("extract").body,
+            "hello"
+        );
     }
 
     #[test]
