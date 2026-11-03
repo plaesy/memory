@@ -473,8 +473,26 @@ impl SearchEngine {
         path: &Path,
         revision: Option<String>,
     ) -> Result<IndexOutcome> {
+        let rel = path.strip_prefix(root).map_err(|_| {
+            MemoryError::ConfigError(format!(
+                "cannot index a file outside the notes root: {}",
+                path.display()
+            ))
+        })?;
+        if rel.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::Prefix(_)
+                    | std::path::Component::RootDir
+                    | std::path::Component::ParentDir
+            )
+        }) {
+            return Err(MemoryError::ConfigError(format!(
+                "cannot index a file with an unsafe relative path: {}",
+                path.display()
+            )));
+        }
         let mut doc = self.extractor.extract_file(path)?;
-        let rel = path.strip_prefix(root).unwrap_or(path);
         doc.source_path = PathBuf::from(rel.to_string_lossy().replace('\\', "/"));
         let key = doc.source_path.to_string_lossy().to_string();
         if let Some((_, Some(h))) = self.db.find_document(&key).await? {
@@ -1611,6 +1629,25 @@ mod tests {
         for r in &hits {
             b.build(r).expect("citation");
         }
+    }
+
+    #[tokio::test]
+    async fn test_index_file_rejects_path_outside_root() {
+        let root = tempfile::tempdir().expect("root");
+        let outside = tempfile::tempdir().expect("outside");
+        let path = write(outside.path(), "secret.md", "outside secret\n");
+        let e = engine(false).await;
+        let err = e
+            .index_file(root.path(), &path)
+            .await
+            .expect_err("outside path must fail");
+        assert!(err.to_string().contains("outside the notes root"));
+        assert!(e
+            .database()
+            .document_paths()
+            .await
+            .expect("paths")
+            .is_empty());
     }
 
     #[tokio::test]
