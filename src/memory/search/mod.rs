@@ -244,16 +244,43 @@ impl SearchEngine {
         if self.snapshot_generation.load(Ordering::Relaxed) == generation {
             return;
         }
+        // Save to a private basename first. The generation marker is published last, so a
+        // crash at any earlier point makes the old snapshot fail validation and triggers rebuild.
+        let tmp = path.with_extension(format!("hnsw.tmp-{}", std::process::id()));
+        let tmp_meta = {
+            let mut p = tmp.as_os_str().to_owned();
+            p.push(".meta.json");
+            PathBuf::from(p)
+        };
+        let marker = path.with_extension("hnsw.gen");
+        let marker_tmp = marker.with_extension(format!("gen.tmp-{}", std::process::id()));
         let saved = {
             let h = self.hnsw.read();
-            h.save(&path)
+            h.save(&tmp)
         };
         match saved {
             Ok(()) => {
-                // Written last: a crash before this leaves a stale generation => rebuild.
-                if std::fs::write(path.with_extension("hnsw.gen"), generation.to_string()).is_ok() {
+                let result = (|| -> std::io::Result<()> {
+                    let meta = {
+                        let mut p = path.as_os_str().to_owned();
+                        p.push(".meta.json");
+                        PathBuf::from(p)
+                    };
+                    // Replace the data and metadata as complete files, then publish generation.
+                    std::fs::rename(&tmp, &path)?;
+                    std::fs::rename(&tmp_meta, &meta)?;
+                    std::fs::write(&marker_tmp, generation.to_string())?;
+                    std::fs::rename(&marker_tmp, &marker)?;
+                    Ok(())
+                })();
+                if result.is_ok() {
                     self.snapshot_generation
                         .store(generation, Ordering::Relaxed);
+                } else {
+                    let _ = std::fs::remove_file(&tmp);
+                    let _ = std::fs::remove_file(&tmp_meta);
+                    let _ = std::fs::remove_file(&marker_tmp);
+                    tracing::warn!("could not atomically publish HNSW snapshot");
                 }
             }
             Err(e) => tracing::warn!("could not save HNSW snapshot: {e}"),
