@@ -55,7 +55,23 @@ memory decisions [--project <id>]... [--status ...] [--include-inactive] [-n N]
 memory contexts  [--project <id>]... [--status ...] [--include-inactive] [-n N]
 memory hygiene <vault>   # also reports broken_project_reference, broken_scope_reference,
                           # conflicting_supersession, and malformed_graph_note
+memory remember <title> [<body>] [--folder F] [--tier T] [--confidence C]
+                [--type project|decision|context|knowledge|capture|preference]
+                [--id ID] [--status S] [--project P] [--scope S]... [--supersedes ID]...
+                [--json]
 ```
+
+`memory remember` is the command-line door into the same write path MCP
+clients use (`memory_remember`): it writes one new Markdown file (never
+overwrites), indexes it immediately, and — when `--type` is given — tags it
+straight into the graph with the frontmatter contract above, validated the
+same way (unknown `--type`, missing `--id`, or a `--status` invalid for that
+type are all rejected before anything is written). Body is read from stdin
+when omitted, so a script or cron job can pipe text in without quoting it on
+the command line. This exists so anything that can shell out — not only
+agents that speak MCP — can add a project, decision, or context: still a
+manual call today, this is the integration point a future auto-capture layer
+(an agent writing a frontmatter note after each turn) would call into.
 
 ### Id resolution
 

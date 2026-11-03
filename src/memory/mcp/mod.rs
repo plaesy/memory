@@ -346,6 +346,7 @@ async fn run_tool(
                     .and_then(Value::as_str)
                     .unwrap_or("medium")
                     .to_string(),
+                graph: None,
             };
             if note.title.trim().is_empty() || note.body.trim().is_empty() {
                 return Err(ToolError::Invalid(

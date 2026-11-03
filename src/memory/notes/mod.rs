@@ -32,6 +32,27 @@ pub struct NewNote {
     pub tier: String,
     /// One of [`CONFIDENCE`].
     pub confidence: String,
+    /// Optional projects/decisions/contexts graph tagging (see `crate::memory::graph`).
+    pub graph: Option<GraphFields>,
+}
+
+/// Graph frontmatter for a new note, mirroring `crate::memory::graph`'s contract
+/// (`type`/`id`/`status`/`project`/`scope`/`supersedes`). Validated against
+/// [`crate::memory::graph::NOTE_TYPES`] before the note is written.
+#[derive(Clone, Debug, Default)]
+pub struct GraphFields {
+    /// `type`: project, decision, context, knowledge, capture, preference.
+    pub note_type: String,
+    /// `id`: stable identifier, referenced by `project` / `scope` / `supersedes`.
+    pub id: String,
+    /// `status`, if given (else the graph module's per-type default applies).
+    pub status: Option<String>,
+    /// `project`: decision/context's main project.
+    pub project: Option<String>,
+    /// `scope`: other projects this note is also relevant to.
+    pub scope: Vec<String>,
+    /// `supersedes`: ids of decisions this one replaces.
+    pub supersedes: Vec<String>,
 }
 
 /// File-name slug of a title: lower-case ASCII words joined by `-`, at most 80 characters.
@@ -106,8 +127,27 @@ pub fn default_inbox(root: &std::path::Path) -> PathBuf {
 /// Front matter and body of a new note.
 pub fn render(note: &NewNote, today: NaiveDate) -> String {
     let title = serde_json::to_string(&note.title).unwrap_or_else(|_| "\"\"".into());
+    let mut graph_lines = String::new();
+    if let Some(g) = &note.graph {
+        graph_lines.push_str(&format!("type: {}\n", g.note_type));
+        graph_lines.push_str(&format!("id: {}\n", g.id));
+        if let Some(status) = &g.status {
+            graph_lines.push_str(&format!("status: {status}\n"));
+        }
+        if let Some(project) = &g.project {
+            graph_lines.push_str(&format!("project: {project}\n"));
+        }
+        if !g.scope.is_empty() {
+            let items: Vec<String> = g.scope.iter().map(|s| format!("\"{s}\"")).collect();
+            graph_lines.push_str(&format!("scope: [{}]\n", items.join(", ")));
+        }
+        if !g.supersedes.is_empty() {
+            let items: Vec<String> = g.supersedes.iter().map(|s| format!("\"{s}\"")).collect();
+            graph_lines.push_str(&format!("supersedes: [{}]\n", items.join(", ")));
+        }
+    }
     format!(
-        "---\ntitle: {title}\ntier: {tier}\nconfidence: {conf}\nlast_verified: {today}\nsource: agent\n---\n\n# {heading}\n\n{body}\n",
+        "---\ntitle: {title}\ntier: {tier}\nconfidence: {conf}\nlast_verified: {today}\nsource: agent\n{graph_lines}---\n\n# {heading}\n\n{body}\n",
         tier = note.tier,
         conf = note.confidence,
         heading = note.title,
@@ -160,6 +200,34 @@ impl SearchEngine {
                 "confidence must be one of high, medium, low (got {})",
                 note.confidence
             )));
+        }
+        if let Some(g) = &note.graph {
+            if !crate::memory::graph::NOTE_TYPES.contains(&g.note_type.as_str()) {
+                return Err(MemoryError::ConfigError(format!(
+                    "unknown graph type: {} (expected one of {:?})",
+                    g.note_type,
+                    crate::memory::graph::NOTE_TYPES
+                )));
+            }
+            if g.id.trim().is_empty() {
+                return Err(MemoryError::ConfigError(
+                    "a graph note (--type given) needs a non-empty --id".into(),
+                ));
+            }
+            if let Some(status) = &g.status {
+                let allowed: &[&str] = match g.note_type.as_str() {
+                    "project" => &crate::memory::graph::PROJECT_STATUSES,
+                    "decision" => &crate::memory::graph::DECISION_STATUSES,
+                    "context" => &crate::memory::graph::CONTEXT_STATUSES,
+                    _ => &[],
+                };
+                if !allowed.is_empty() && !allowed.contains(&status.to_lowercase().as_str()) {
+                    return Err(MemoryError::ConfigError(format!(
+                        "status '{status}' is not valid for type '{}' (expected one of {allowed:?})",
+                        g.note_type
+                    )));
+                }
+            }
         }
         let rel = if note.folder.trim().is_empty() {
             default_inbox(&root)
@@ -269,6 +337,7 @@ mod tests {
             body: "trust me".into(),
             tier: "procedural".into(),
             confidence: "high".into(),
+            graph: None,
         };
         let path = engine.remember(&note).await.expect("saved");
         let text = std::fs::read_to_string(path).expect("read");
@@ -286,6 +355,7 @@ mod tests {
             body: "x".into(),
             tier: "procedural".into(),
             confidence: "high".into(),
+            graph: None,
         };
         let blank = NewNote {
             title: "   ".into(),
@@ -319,6 +389,7 @@ mod tests {
             body: "x".into(),
             tier: "procedural".into(),
             confidence: "high".into(),
+            graph: None,
         };
         assert!(engine.remember(&note).await.is_err());
         assert!(!outside.path().join("escape.md").exists());
@@ -352,10 +423,95 @@ mod tests {
             body: "Revert the release.".into(),
             tier: "procedural".into(),
             confidence: "medium".into(),
+            graph: None,
         };
         let text = render(&note, NaiveDate::from_ymd_opt(2026, 10, 26).unwrap());
         assert!(text.contains("source: agent"));
         assert!(text.contains("last_verified: 2026-10-26"));
         assert!(text.contains("title: \"Rollback \\\"plan\\\"\""));
+    }
+
+    #[tokio::test]
+    async fn remember_writes_valid_graph_fields_and_they_are_queryable() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let engine = engine(dir.path()).await;
+        let note = NewNote {
+            folder: "01. Projects".into(),
+            title: "Studio C".into(),
+            body: "A new studio.".into(),
+            tier: "semantic".into(),
+            confidence: "medium".into(),
+            graph: Some(GraphFields {
+                note_type: "project".into(),
+                id: "studio-c".into(),
+                status: Some("active".into()),
+                project: None,
+                scope: vec![],
+                supersedes: vec![],
+            }),
+        };
+        let path = engine.remember(&note).await.expect("saved");
+        let text = std::fs::read_to_string(&path).expect("read");
+        assert!(text.contains("type: project"));
+        assert!(text.contains("id: studio-c"));
+        assert!(text.contains("status: active"));
+        let graph = crate::memory::graph::load_graph(&engine.database())
+            .await
+            .expect("graph loads");
+        assert!(graph.notes.iter().any(|n| n.id == "studio-c"));
+    }
+
+    #[tokio::test]
+    async fn remember_rejects_unknown_graph_type_and_missing_id() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let engine = engine(dir.path()).await;
+        let bad_type = NewNote {
+            folder: String::new(),
+            title: "X".into(),
+            body: "x".into(),
+            tier: "semantic".into(),
+            confidence: "medium".into(),
+            graph: Some(GraphFields {
+                note_type: "not-a-type".into(),
+                id: "x".into(),
+                status: None,
+                project: None,
+                scope: vec![],
+                supersedes: vec![],
+            }),
+        };
+        assert!(engine.remember(&bad_type).await.is_err());
+        let missing_id = NewNote {
+            folder: String::new(),
+            title: "Y".into(),
+            body: "y".into(),
+            tier: "semantic".into(),
+            confidence: "medium".into(),
+            graph: Some(GraphFields {
+                note_type: "decision".into(),
+                id: String::new(),
+                status: None,
+                project: None,
+                scope: vec![],
+                supersedes: vec![],
+            }),
+        };
+        assert!(engine.remember(&missing_id).await.is_err());
+        let bad_status = NewNote {
+            folder: String::new(),
+            title: "Z".into(),
+            body: "z".into(),
+            tier: "semantic".into(),
+            confidence: "medium".into(),
+            graph: Some(GraphFields {
+                note_type: "decision".into(),
+                id: "z1".into(),
+                status: Some("not-a-status".into()),
+                project: None,
+                scope: vec![],
+                supersedes: vec![],
+            }),
+        };
+        assert!(engine.remember(&bad_status).await.is_err());
     }
 }

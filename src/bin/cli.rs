@@ -12,6 +12,7 @@
 //! memory config mcp [--app X]     integration snippets for MCP clients (Claude Code, n8n, Dify, Kilo Code, …)
 //! memory serve [--mcp]            JSON service on stdin/stdout, or MCP server with --mcp
 //! memory serve --mcp --transport http --port 8080   MCP over Streamable HTTP
+//! memory remember "title" "body" [--type project|decision|context] [--id ID]  write a note
 //! ```
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -232,6 +233,47 @@ enum Command {
         limit: usize,
         #[arg(long, value_enum, default_value_t = GraphFormat::Text)]
         format: GraphFormat,
+    },
+    /// Write a new note (optionally tagged into the projects/decisions/contexts graph).
+    ///
+    /// This is the same `remember` write path MCP clients use (`memory_remember`), exposed on
+    /// the command line so any script, cron job, or agent that only shells out can write memory
+    /// without speaking MCP. Creates a file only; an existing note is never overwritten.
+    Remember {
+        /// Note title; also the basis of the file name.
+        title: String,
+        /// Markdown body. Omit to read the body from stdin.
+        body: Option<String>,
+        /// Folder relative to the notes root (default: the vault's inbox).
+        #[arg(long)]
+        folder: Option<String>,
+        /// core, episodic, semantic, procedural, archive.
+        #[arg(long, default_value = "semantic")]
+        tier: String,
+        /// high, medium, low. A `high` claim from an agent is stored as `medium`.
+        #[arg(long, default_value = "medium")]
+        confidence: String,
+        /// Tag this note into the graph: project, decision, context, knowledge, capture, preference.
+        #[arg(long = "type")]
+        note_type: Option<String>,
+        /// Stable id for the graph note (required when --type is given).
+        #[arg(long)]
+        id: Option<String>,
+        /// Graph status (e.g. active, proposed, superseded — see `memory` graph module docs).
+        #[arg(long)]
+        status: Option<String>,
+        /// decision/context: the project this note mainly belongs to.
+        #[arg(long)]
+        project: Option<String>,
+        /// Also relevant to these projects (repeatable).
+        #[arg(long = "scope")]
+        scope: Vec<String>,
+        /// decision: ids of decisions this one replaces (repeatable).
+        #[arg(long = "supersedes")]
+        supersedes: Vec<String>,
+        /// Print the created file's path as JSON instead of plain text.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -749,6 +791,63 @@ async fn run(cli: Cli) -> Result<()> {
                 limit,
             };
             print_context_list(&graph, &filter, format);
+        }
+        Command::Remember {
+            title,
+            body,
+            folder,
+            tier,
+            confidence,
+            note_type,
+            id,
+            status,
+            project,
+            scope,
+            supersedes,
+            json,
+        } => {
+            let body = match body {
+                Some(b) => b,
+                None => {
+                    use std::io::Read;
+                    let mut buf = String::new();
+                    std::io::stdin()
+                        .read_to_string(&mut buf)
+                        .map_err(|e| MemoryError::IoError {
+                            path: "<stdin>".into(),
+                            source: e,
+                        })?;
+                    buf
+                }
+            };
+            let graph = match &note_type {
+                Some(note_type) => Some(plaesy::memory::notes::GraphFields {
+                    note_type: note_type.clone(),
+                    id: id.clone().unwrap_or_default(),
+                    status,
+                    project,
+                    scope,
+                    supersedes,
+                }),
+                None => None,
+            };
+            let note = plaesy::memory::notes::NewNote {
+                folder: folder.unwrap_or_default(),
+                title,
+                body,
+                tier,
+                confidence,
+                graph,
+            };
+            let path = engine.remember(&note).await?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({ "path": path.display().to_string() })
+                );
+            } else {
+                println!("saved: {}", path.display());
+            }
         }
     }
     Ok(())
