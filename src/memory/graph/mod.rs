@@ -242,14 +242,35 @@ pub enum Resolved<'a> {
 /// closest titles/ids by substring.
 pub fn resolve_project<'a>(graph: &'a Graph, query: &str) -> Resolved<'a> {
     let projects = graph.projects();
-    if let Some(exact) = projects.iter().find(|p| p.id == query) {
-        return Resolved::Found(exact);
+    let exact_ids: Vec<&&GraphNote> = projects.iter().filter(|p| p.id == query).collect();
+    match exact_ids.len() {
+        1 => return Resolved::Found(exact_ids[0]),
+        n if n > 1 => {
+            return Resolved::Ambiguous {
+                query: query.to_string(),
+                candidates: exact_ids
+                    .iter()
+                    .map(|p| format!("{} ({})", p.id, p.title))
+                    .collect(),
+            }
+        }
+        _ => {}
     }
-    if let Some(by_title) = projects
+    let title_matches: Vec<&&GraphNote> = projects
         .iter()
-        .find(|p| p.title.eq_ignore_ascii_case(query))
-    {
-        return Resolved::Found(by_title);
+        .filter(|p| p.title.eq_ignore_ascii_case(query))
+        .collect();
+    if title_matches.len() == 1 {
+        return Resolved::Found(title_matches[0]);
+    }
+    if title_matches.len() > 1 {
+        return Resolved::Ambiguous {
+            query: query.to_string(),
+            candidates: title_matches
+                .iter()
+                .map(|p| format!("{} ({})", p.id, p.title))
+                .collect(),
+        };
     }
     let prefix_matches: Vec<&&GraphNote> = projects
         .iter()
@@ -453,6 +474,24 @@ mod tests {
     fn empty_vault_lists_nothing() {
         let g = graph_of(vec![]);
         assert!(g.projects().is_empty());
+    }
+
+    #[test]
+    fn duplicate_exact_project_ids_are_ambiguous() {
+        let g = graph_of(vec![
+            doc(
+                "a.md",
+                &[("type", s("project")), ("id", s("same")), ("title", s("A"))],
+            ),
+            doc(
+                "b.md",
+                &[("type", s("project")), ("id", s("same")), ("title", s("B"))],
+            ),
+        ]);
+        match resolve_project(&g, "same") {
+            Resolved::Ambiguous { candidates, .. } => assert_eq!(candidates.len(), 2),
+            _ => panic!("duplicate ids must not resolve to the first claimant"),
+        }
     }
 
     #[test]
