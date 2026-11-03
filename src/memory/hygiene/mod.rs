@@ -341,6 +341,61 @@ impl SearchEngine {
             }
         }
 
+        // Project/decision/context graph: broken relations and conflicting supersession.
+        // Read-only and additive — a vault with no `type:`-tagged notes reports nothing here.
+        let graph = crate::memory::graph::load_graph(&db).await?;
+        for m in &graph.malformed {
+            findings.push(finding(
+                "malformed_graph_note",
+                &m.path,
+                None,
+                format!("type: {} — {}", m.note_type, m.reason),
+                "FACT",
+            ));
+        }
+        let project_ids: std::collections::HashSet<&str> = graph.project_ids().into_iter().collect();
+        for n in &graph.notes {
+            if n.note_type == "project" {
+                continue;
+            }
+            if let Some(p) = &n.project {
+                if !project_ids.contains(p.as_str()) {
+                    findings.push(finding(
+                        "broken_project_reference",
+                        &n.path,
+                        None,
+                        format!("project '{p}' matches no `type: project` note"),
+                        "FACT",
+                    ));
+                }
+            }
+            for s in &n.scope {
+                if !project_ids.contains(s.as_str()) {
+                    findings.push(finding(
+                        "broken_scope_reference",
+                        &n.path,
+                        None,
+                        format!("scope '{s}' matches no `type: project` note"),
+                        "FACT",
+                    ));
+                }
+            }
+        }
+        let (conflicts, _) = crate::memory::graph::supersession_map(&graph);
+        for c in &conflicts {
+            findings.push(finding(
+                "conflicting_supersession",
+                "(graph)",
+                None,
+                format!(
+                    "decision '{}' is claimed superseded by multiple active decisions: {}",
+                    c.target_id,
+                    c.claimants.join(", ")
+                ),
+                "FACT",
+            ));
+        }
+
         findings.sort_by(|a, b| {
             (a.path.as_str(), a.line, a.kind.as_str()).cmp(&(
                 b.path.as_str(),

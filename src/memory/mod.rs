@@ -150,6 +150,9 @@ pub mod embeddings;
 /// See [`storage`] module documentation for schema and transaction patterns.
 pub mod storage;
 
+/// Structured project / decision / context graph built from notes that declare `type`.
+pub mod graph;
+
 /// Search subsystem for query execution and ranking.
 ///
 /// Combines vector search, keyword search, and ranking algorithms.
