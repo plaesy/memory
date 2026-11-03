@@ -126,24 +126,33 @@ pub fn default_inbox(root: &std::path::Path) -> PathBuf {
 
 /// Front matter and body of a new note.
 pub fn render(note: &NewNote, today: NaiveDate) -> String {
-    let title = serde_json::to_string(&note.title).unwrap_or_else(|_| "\"\"".into());
+    // serde_json::to_string on a &str produces a double-quoted, properly escaped string that
+    // is also valid YAML (YAML's double-quoted scalar syntax is a superset of JSON's) — this is
+    // the only safe way to embed agent-supplied text as a YAML value, since any of these fields
+    // may contain ':', '"', '#', or other characters that break bare/naively-quoted YAML.
+    fn yaml_str(s: &str) -> String {
+        serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into())
+    }
+    fn yaml_list(items: &[String]) -> String {
+        let rendered: Vec<String> = items.iter().map(|s| yaml_str(s)).collect();
+        format!("[{}]", rendered.join(", "))
+    }
+    let title = yaml_str(&note.title);
     let mut graph_lines = String::new();
     if let Some(g) = &note.graph {
-        graph_lines.push_str(&format!("type: {}\n", g.note_type));
-        graph_lines.push_str(&format!("id: {}\n", g.id));
+        graph_lines.push_str(&format!("type: {}\n", yaml_str(&g.note_type)));
+        graph_lines.push_str(&format!("id: {}\n", yaml_str(&g.id)));
         if let Some(status) = &g.status {
-            graph_lines.push_str(&format!("status: {status}\n"));
+            graph_lines.push_str(&format!("status: {}\n", yaml_str(status)));
         }
         if let Some(project) = &g.project {
-            graph_lines.push_str(&format!("project: {project}\n"));
+            graph_lines.push_str(&format!("project: {}\n", yaml_str(project)));
         }
         if !g.scope.is_empty() {
-            let items: Vec<String> = g.scope.iter().map(|s| format!("\"{s}\"")).collect();
-            graph_lines.push_str(&format!("scope: [{}]\n", items.join(", ")));
+            graph_lines.push_str(&format!("scope: {}\n", yaml_list(&g.scope)));
         }
         if !g.supersedes.is_empty() {
-            let items: Vec<String> = g.supersedes.iter().map(|s| format!("\"{s}\"")).collect();
-            graph_lines.push_str(&format!("supersedes: [{}]\n", items.join(", ")));
+            graph_lines.push_str(&format!("supersedes: {}\n", yaml_list(&g.supersedes)));
         }
     }
     format!(
@@ -183,6 +192,9 @@ impl SearchEngine {
             return Err(MemoryError::ConfigError(format!(
                 "title is longer than {MAX_TITLE_CHARS} characters"
             )));
+        }
+        if note.body.trim().is_empty() {
+            return Err(MemoryError::ConfigError("body must not be empty".into()));
         }
         if note.body.len() > MAX_BODY_BYTES {
             return Err(MemoryError::ConfigError(format!(
@@ -362,6 +374,11 @@ mod tests {
             ..base.clone()
         };
         assert!(engine.remember(&blank).await.is_err());
+        let blank_body = NewNote {
+            body: "  \n".into(),
+            ..base.clone()
+        };
+        assert!(engine.remember(&blank_body).await.is_err());
         let long = NewNote {
             title: "t".repeat(MAX_TITLE_CHARS + 1),
             ..base.clone()
@@ -452,9 +469,9 @@ mod tests {
         };
         let path = engine.remember(&note).await.expect("saved");
         let text = std::fs::read_to_string(&path).expect("read");
-        assert!(text.contains("type: project"));
-        assert!(text.contains("id: studio-c"));
-        assert!(text.contains("status: active"));
+        assert!(text.contains("type: \"project\""));
+        assert!(text.contains("id: \"studio-c\""));
+        assert!(text.contains("status: \"active\""));
         let graph = crate::memory::graph::load_graph(&engine.database())
             .await
             .expect("graph loads");
@@ -513,5 +530,54 @@ mod tests {
             }),
         };
         assert!(engine.remember(&bad_status).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn graph_fields_with_yaml_breaking_characters_still_parse() {
+        // Regression test: id/status/project/scope with ':' or '"' used to be written as bare
+        // or naively single-quoted YAML scalars, producing invalid frontmatter that silently
+        // fell back to plain-text indexing (the note vanished from the graph without error).
+        let dir = tempfile::tempdir().expect("tmp");
+        let engine = engine(dir.path()).await;
+        let note = NewNote {
+            folder: String::new(),
+            title: "Edge case".into(),
+            body: "x".into(),
+            tier: "semantic".into(),
+            confidence: "medium".into(),
+            graph: Some(GraphFields {
+                note_type: "decision".into(),
+                id: "weird: id \"with\" quotes".into(),
+                status: Some("active".into()),
+                project: Some("studio: a".into()),
+                scope: vec!["studio\"b".into(), "plain".into()],
+                supersedes: vec![],
+            }),
+        };
+        let path = engine.remember(&note).await.expect("saved");
+        let text = std::fs::read_to_string(&path).expect("read");
+        // The written file must be valid YAML frontmatter, not a fallback-to-plain-text note.
+        let fm = text
+            .strip_prefix("---\n")
+            .and_then(|s| s.split_once("\n---\n"))
+            .map(|(fm, _)| fm)
+            .expect("has frontmatter delimiters");
+        let parsed: serde_yaml::Value =
+            serde_yaml::from_str(fm).expect("frontmatter must be valid YAML");
+        assert_eq!(
+            parsed.get("id").and_then(|v| v.as_str()),
+            Some("weird: id \"with\" quotes")
+        );
+        assert_eq!(
+            parsed.get("project").and_then(|v| v.as_str()),
+            Some("studio: a")
+        );
+        let graph = crate::memory::graph::load_graph(&engine.database())
+            .await
+            .expect("graph loads");
+        assert!(graph
+            .notes
+            .iter()
+            .any(|n| n.id == "weird: id \"with\" quotes"));
     }
 }

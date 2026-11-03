@@ -820,6 +820,16 @@ async fn run(cli: Cli) -> Result<()> {
                     buf
                 }
             };
+            let has_graph_fields = id.is_some()
+                || status.is_some()
+                || project.is_some()
+                || !scope.is_empty()
+                || !supersedes.is_empty();
+            if note_type.is_none() && has_graph_fields {
+                return Err(MemoryError::ConfigError(
+                    "--id/--status/--project/--scope/--supersedes require --type".into(),
+                ));
+            }
             let graph = match &note_type {
                 Some(note_type) => Some(plaesy::memory::notes::GraphFields {
                     note_type: note_type.clone(),
