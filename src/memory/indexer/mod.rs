@@ -49,6 +49,29 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+#[cfg(target_os = "linux")]
+fn read_index_file(path: &Path) -> std::io::Result<String> {
+    use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    // Linux O_NOFOLLOW prevents a final-component symlink swap between metadata
+    // validation and the read. Parent-directory replacement still requires
+    // descriptor-relative traversal and remains an explicit residual risk.
+    const O_NOFOLLOW: i32 = 0x20000;
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(O_NOFOLLOW)
+        .open(path)?;
+    let mut content = String::new();
+    file.read_to_string(&mut content)?;
+    Ok(content)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn read_index_file(path: &Path) -> std::io::Result<String> {
+    std::fs::read_to_string(path)
+}
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 
 /// A document represents a single indexed file.
@@ -356,7 +379,7 @@ impl Extractor {
                 path.display()
             )));
         }
-        let content = std::fs::read_to_string(path).map_err(|e| MemoryError::IoError {
+        let content = read_index_file(path).map_err(|e| MemoryError::IoError {
             path: path.display().to_string(),
             source: e,
         })?;
