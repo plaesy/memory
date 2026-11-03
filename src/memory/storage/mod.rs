@@ -535,6 +535,11 @@ impl Database {
     /// (`all-MiniLM-L6-v2`). If a different model was recorded, or the model changed now, every
     /// document's hash is cleared so the next sync re-embeds it. Returns `true` on such a change.
     pub async fn record_embedding_model(&self, model: &str) -> Result<bool> {
+        self.record_embedding_identity(model).await
+    }
+
+    /// Record the exact embedding runtime identity used by stored vectors.
+    pub async fn record_embedding_identity(&self, identity: &str) -> Result<bool> {
         let conn = self.conn.lock();
         let recorded: Option<String> = conn
             .query_row(
@@ -553,7 +558,7 @@ impl Database {
                 (docs > 0).then(|| LEGACY_EMBEDDING_MODEL.to_string())
             }
         };
-        let changed = previous.as_deref().is_some_and(|p| p != model);
+        let changed = previous.as_deref().is_some_and(|p| p != identity);
         if changed {
             conn.execute_batch("UPDATE documents SET hash = NULL;")
                 .map_err(db_err)?;
@@ -561,7 +566,7 @@ impl Database {
         conn.execute(
             "INSERT INTO index_metadata(key, value) VALUES ('embedding_model', ?1)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            params![model],
+            params![identity],
         )
         .map_err(db_err)?;
         Ok(changed)

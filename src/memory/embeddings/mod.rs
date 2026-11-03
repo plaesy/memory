@@ -35,6 +35,7 @@ use crate::memory::error::{MemoryError, Result};
 use lru::LruCache;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
@@ -716,6 +717,40 @@ impl EmbeddingEngine {
         }
     }
 
+    /// Stable identity of the exact vector-producing runtime configuration.
+    ///
+    /// Includes model files when the ONNX backend is active, so replacing a model
+    /// under the same name cannot silently reuse vectors from the old model.
+    pub fn identity(&self) -> Result<String> {
+        let mut hasher = Sha256::new();
+        let backend = match &self.backend {
+            Backend::Hashing => "hashing",
+            Backend::Onnx(_) => "onnx",
+        };
+        hasher.update(backend.as_bytes());
+        hasher.update([0]);
+        hasher.update(self.config.model_name.as_bytes());
+        hasher.update([0]);
+        hasher.update(self.config.dimension.to_le_bytes());
+        hasher.update(self.config.max_seq_len.to_le_bytes());
+        hasher.update(self.query_prefix.as_bytes());
+        hasher.update([0]);
+        hasher.update(self.passage_prefix.as_bytes());
+        if matches!(self.backend, Backend::Onnx(_)) {
+            let dir = Self::resolve_model_dir(&self.config).ok_or_else(|| {
+                MemoryError::EmbeddingModelError("embedding model directory disappeared".into())
+            })?;
+            for name in ["model.onnx", "vocab.txt", "tokenizer.json"] {
+                let path = dir.join(name);
+                if let Ok(bytes) = std::fs::read(&path) {
+                    hasher.update(name.as_bytes());
+                    hasher.update(Sha256::digest(bytes));
+                }
+            }
+        }
+        Ok(format!("sha256:{:x}", hasher.finalize()))
+    }
+
     /// Name of the model that produces the vectors (as configured).
     pub fn model_name(&self) -> &str {
         &self.config.model_name
@@ -844,6 +879,25 @@ mod tests {
         assert_eq!(v.len(), 384);
         let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
         assert!((norm - 1.0).abs() < 1e-3, "L2-normalised, got {norm}");
+    }
+
+    #[test]
+    fn test_embedding_identity_changes_with_runtime_configuration() {
+        let base = EmbeddingEngine::hashing(64).expect("base");
+        let prefixed = EmbeddingEngine::build(
+            EmbeddingConfig {
+                model_name: "feature-hashing".into(),
+                dimension: 64,
+                query_prefix: Some("query: ".into()),
+                ..EmbeddingConfig::default()
+            },
+            Backend::Hashing,
+        )
+        .expect("prefixed");
+        let other_dim = EmbeddingEngine::hashing(65).expect("other dimension");
+        assert_ne!(base.identity().unwrap(), prefixed.identity().unwrap());
+        assert_ne!(base.identity().unwrap(), other_dim.identity().unwrap());
+        assert_eq!(base.identity().unwrap(), base.identity().unwrap());
     }
 
     #[test]

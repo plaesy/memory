@@ -48,7 +48,7 @@ pub use filter::{
 pub mod rerank;
 
 use crate::memory::config::{MemoryConfig, SearchConfig};
-use crate::memory::embeddings::{EmbeddingBackend, EmbeddingEngine, EmbeddingVector};
+use crate::memory::embeddings::{EmbeddingEngine, EmbeddingVector};
 use crate::memory::error::{MemoryError, Result};
 use crate::memory::indexer::{
     is_excluded, is_indexable, scan_dir, Chunker, Document, EventKind, Extractor, FileEvent,
@@ -160,17 +160,18 @@ impl SearchEngine {
         // documents are queued for re-embedding and the HNSW snapshot (built from the old model)
         // is not reused.
         let model_changed = match &embeddings {
-            Some(e) if e.backend() == EmbeddingBackend::Onnx => {
-                let changed = db.record_embedding_model(e.model_name()).await?;
+            Some(e) => {
+                let identity = e.identity()?;
+                let changed = db.record_embedding_identity(&identity).await?;
                 if changed {
                     tracing::warn!(
                         model = e.model_name(),
-                        "embedding model changed; documents are re-embedded on the next sync"
+                        "embedding runtime changed; documents are re-embedded on the next sync"
                     );
                 }
                 changed
             }
-            _ => false,
+            None => false,
         };
         let generation = db.generation().await?;
         let snapshot = if model_changed {
