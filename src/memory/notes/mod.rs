@@ -235,8 +235,25 @@ pub fn render(note: &NewNote, today: NaiveDate) -> String {
     // is also valid YAML (YAML's double-quoted scalar syntax is a superset of JSON's) — this is
     // the only safe way to embed agent-supplied text as a YAML value, since any of these fields
     // may contain ':', '"', '#', or other characters that break bare/naively-quoted YAML.
+    //
+    // JSON itself is not quite enough: JSON permits raw 0x7F (DEL) and the C1 control range
+    // (0x80-0x9F) unescaped inside a string, but YAML's double-quoted scalar grammar forbids
+    // raw control characters outside its printable-character set. A title/id/project containing
+    // such a byte (e.g. a stray DEL from clipboard noise) would otherwise produce frontmatter
+    // that fails to parse as YAML, silently dropping the note from the graph. So every control
+    // character is re-escaped as `\xHH` after JSON encoding, which is also valid YAML syntax.
     fn yaml_str(s: &str) -> String {
-        serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into())
+        let json = serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into());
+        let mut out = String::with_capacity(json.len());
+        for c in json.chars() {
+            if c.is_control() && c != '\u{0}' {
+                // '\u{0}' never reaches here since JSON already escaped it as \u0000.
+                out.push_str(&format!("\\x{:02X}", c as u32));
+            } else {
+                out.push(c);
+            }
+        }
+        out
     }
     fn yaml_list(items: &[String]) -> String {
         let rendered: Vec<String> = items.iter().map(|s| yaml_str(s)).collect();
@@ -394,44 +411,54 @@ impl SearchEngine {
         }
         let path = dir.join(format!("{}.md", slugify(title)));
         let text = render(note, Utc::now().date_naive());
-        // Publish through a same-directory temporary file. `hard_link` is used for admission:
-        // unlike rename, it fails when the destination already exists and therefore cannot
-        // overwrite a note created by another writer. sync_all makes the complete note durable
-        // before it becomes visible to indexers.
+        // Publish through a same-directory temporary file. On Linux, every step from here is
+        // performed relative to a single O_NOFOLLOW directory descriptor (`DirHandle`) opened
+        // once against `dir`: this closes the window between the `canonicalize` check above and
+        // the actual write/link/unlink, where a path-based re-open could otherwise follow a
+        // symlink swapped in after the check. `hard_link`/`linkat` is used for admission: unlike
+        // rename, it fails when the destination already exists and therefore cannot overwrite a
+        // note created by another writer. sync_all makes the complete note durable before it
+        // becomes visible to indexers.
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let tmp = dir.join(format!(
-            ".{}.tmp-{}-{}",
-            slugify(title),
-            std::process::id(),
-            nonce
-        ));
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&tmp)
-            .map_err(|e| MemoryError::IoError {
-                path: tmp.display().to_string(),
-                source: e,
-            })?;
+        let tmp_name = format!(".{}.tmp-{}-{}", slugify(title), std::process::id(), nonce);
+        let dest_name = format!("{}.md", slugify(title));
+        let tmp = dir.join(&tmp_name);
         let result = (|| -> std::io::Result<()> {
+            let handle = crate::memory::fs_safety::DirHandle::open_nofollow(&dir)?;
+            let mut file = handle.create_new_file(Path::new(&tmp_name))?;
             file.write_all(text.as_bytes())?;
             file.sync_all()?;
             drop(file);
-            std::fs::hard_link(&tmp, &path)?;
-            let _ = std::fs::remove_file(&tmp);
-            if let Ok(parent) = std::fs::File::open(&dir) {
-                let _ = parent.sync_all();
+            // Test-only fault injection: widen the window between the temp file becoming
+            // visible on disk and its publication (hard_link + unlink) so a crash-recovery
+            // test's SIGKILL can deterministically land inside it. Gated behind an env var that
+            // is never set in production, so this has zero effect outside tests.
+            #[cfg(debug_assertions)]
+            if std::env::var_os("PLAESY_MEMORY_TEST_SLOW_PUBLISH").is_some() {
+                std::thread::sleep(std::time::Duration::from_secs(2));
             }
+            handle.link_within(Path::new(&tmp_name), Path::new(&dest_name))?;
+            let _ = handle.remove_file(Path::new(&tmp_name));
+            let _ = handle.sync();
             Ok(())
         })();
         if let Err(e) = result {
             let _ = std::fs::remove_file(&tmp);
             if e.kind() == std::io::ErrorKind::AlreadyExists {
+                // Idempotency: a retried `remember` call (e.g. after a client-side timeout on a
+                // call that actually succeeded) must not be treated as a conflict when the note
+                // already on disk is exactly the one this call would have written. Compare
+                // everything except `last_verified`, which legitimately differs by the day.
+                if let Ok(existing) = std::fs::read_to_string(&path) {
+                    if strip_last_verified(&existing) == strip_last_verified(&text) {
+                        return Ok(path);
+                    }
+                }
                 return Err(MemoryError::ConfigError(format!(
-                    "note already exists: {}",
+                    "note already exists with different content: {}",
                     path.display()
                 )));
             }
@@ -443,6 +470,15 @@ impl SearchEngine {
         self.index_file_at(&root, &path, None).await?;
         Ok(path)
     }
+}
+
+/// Remove the `last_verified: YYYY-MM-DD` line so two renders of the same note on different
+/// days still compare equal for idempotency purposes.
+fn strip_last_verified(text: &str) -> String {
+    text.lines()
+        .filter(|line| !line.starts_with("last_verified:"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(test)]
@@ -621,6 +657,46 @@ mod tests {
         assert!(text.contains("source: agent"));
         assert!(text.contains("last_verified: 2026-10-26"));
         assert!(text.contains("title: \"Rollback \\\"plan\\\"\""));
+    }
+
+    #[tokio::test]
+    async fn remember_is_idempotent_on_identical_retry() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let engine = engine(dir.path()).await;
+        let note = NewNote {
+            folder: "".into(),
+            title: "Retry Note".into(),
+            body: "Same content both times.".into(),
+            tier: "semantic".into(),
+            confidence: "medium".into(),
+            graph: None,
+        };
+        let first = engine.remember(&note).await.expect("first call");
+        // Simulate a client retry after e.g. a timeout: identical call must succeed again with
+        // the same path, not error as a conflict.
+        let second = engine.remember(&note).await.expect("idempotent retry");
+        assert_eq!(first, second);
+    }
+
+    #[tokio::test]
+    async fn remember_rejects_same_title_with_different_content() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let engine = engine(dir.path()).await;
+        let mut note = NewNote {
+            folder: "".into(),
+            title: "Conflict Note".into(),
+            body: "Original content.".into(),
+            tier: "semantic".into(),
+            confidence: "medium".into(),
+            graph: None,
+        };
+        engine.remember(&note).await.expect("first call");
+        note.body = "Different content, not a retry.".into();
+        let err = engine
+            .remember(&note)
+            .await
+            .expect_err("must not silently overwrite differing content");
+        assert!(err.to_string().contains("different content"));
     }
 
     #[tokio::test]
@@ -822,5 +898,95 @@ mod tests {
             .notes
             .iter()
             .any(|n| n.id == "weird: id \"with\" quotes"));
+    }
+}
+
+/// Property-based adversarial fuzzing for the pure, boundary-facing helpers in this module.
+/// These take arbitrary agent/user-controlled strings and must never panic, never escape the
+/// notes root, and must always round-trip through valid YAML.
+#[cfg(test)]
+mod fuzz {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        // slugify must never panic, is always <= 80 chars, and only ever produces
+        // lowercase ascii alphanumerics and single, non-leading/trailing hyphens.
+        #[test]
+        fn slugify_never_panics_and_is_bounded(title in ".*") {
+            let slug = slugify(&title);
+            prop_assert!(slug.chars().count() <= 80);
+            prop_assert!(!slug.is_empty());
+            prop_assert!(slug.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'));
+            prop_assert!(!slug.starts_with('-'));
+            prop_assert!(!slug.ends_with('-'));
+            prop_assert!(!slug.contains("--"));
+        }
+
+        // safe_folder must reject every attempt to leave the root (via '..', absolute paths,
+        // or anything that is not a plain relative Normal-component path), for any input.
+        #[test]
+        fn safe_folder_never_escapes_root(folder in ".*") {
+            if let Ok(path) = safe_folder(&folder) {
+                for part in path.components() {
+                    prop_assert!(matches!(part, std::path::Component::Normal(_)));
+                }
+            }
+            // Either outcome (Ok with a safe relative path, or Err) is acceptable; a panic is not.
+        }
+
+        #[test]
+        fn safe_folder_rejects_all_parent_traversal(
+            segments in prop::collection::vec("[a-zA-Z0-9_. ]{0,8}", 1..6)
+        ) {
+            let folder = segments.join("/") + "/../escape";
+            prop_assert!(safe_folder(&folder).is_err());
+        }
+
+        // render() embeds arbitrary agent-supplied strings into YAML frontmatter via
+        // serde_json::to_string (JSON double-quoted scalars are valid YAML scalars). The
+        // produced frontmatter must always parse back as YAML, for any title/body/graph text,
+        // including strings containing ':', '"', '#', control characters, or unicode.
+        #[test]
+        fn render_always_produces_parseable_yaml(
+            title in ".{0,200}",
+            body in ".{0,200}",
+            id in ".{0,100}",
+            project in ".{0,100}",
+        ) {
+            let note = NewNote {
+                folder: String::new(),
+                title: if title.trim().is_empty() { "x".to_string() } else { title },
+                body: if body.trim().is_empty() { "x".to_string() } else { body },
+                tier: "semantic".into(),
+                confidence: "medium".into(),
+                graph: Some(GraphFields {
+                    note_type: "decision".into(),
+                    id: if id.trim().is_empty() { "id".to_string() } else { id },
+                    status: None,
+                    project: if project.is_empty() { None } else { Some(project) },
+                    scope: vec![],
+                    supersedes: vec![],
+                }),
+            };
+            let text = render(&note, NaiveDate::from_ymd_opt(2026, 1, 1).unwrap());
+            let fm = text
+                .strip_prefix("---\n")
+                .and_then(|s| s.split_once("\n---\n"))
+                .map(|(fm, _)| fm);
+            prop_assert!(fm.is_some(), "frontmatter delimiters must always be present");
+            let parsed: std::result::Result<serde_yaml::Value, _> = serde_yaml::from_str(fm.unwrap());
+            prop_assert!(parsed.is_ok(), "rendered frontmatter must always be valid YAML: {:?}", parsed.err());
+        }
+
+        // strip_last_verified must be stable (idempotent) and must never panic on arbitrary
+        // multi-line text, including text that itself contains lines starting with the same
+        // prefix in positions other than the real date line.
+        #[test]
+        fn strip_last_verified_is_idempotent(text in ".{0,500}") {
+            let once = strip_last_verified(&text);
+            let twice = strip_last_verified(&once);
+            prop_assert_eq!(once, twice);
+        }
     }
 }

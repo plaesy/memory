@@ -138,6 +138,7 @@ pub mod indexer;
 ///
 /// See [`embeddings`] module documentation for configuration and examples.
 pub mod embeddings;
+pub mod fs_safety;
 
 /// Storage subsystem for metadata, vectors, and indexes.
 ///

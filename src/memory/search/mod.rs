@@ -51,7 +51,8 @@ use crate::memory::config::{MemoryConfig, SearchConfig};
 use crate::memory::embeddings::{EmbeddingEngine, EmbeddingVector};
 use crate::memory::error::{MemoryError, Result};
 use crate::memory::indexer::{
-    is_excluded, is_indexable, scan_dir, Chunker, Document, EventKind, Extractor, FileEvent,
+    is_excluded, is_indexable, is_skipped_dir_name, scan_dir, Chunker, Document, EventKind,
+    Extractor, FileEvent,
 };
 use crate::memory::metrics::{IndexHealth, Metrics, SearchType, Timer};
 use crate::memory::notes::WriteLock;
@@ -139,6 +140,58 @@ fn git_revision(dir: &Path) -> Option<String> {
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .filter(|s| !s.is_empty())
+}
+
+/// Crash/power-loss recovery (startup reconciliation): remove leftover note-publication
+/// temporary files left behind by a process that died between creating `.{slug}.tmp-{pid}-{nonce}`
+/// and either linking it into place or deleting it (see `SearchEngine::remember`).
+///
+/// These files are never themselves indexed (the dot-prefix hides them and they are not
+/// `.md`/`.txt`), so without this they would accumulate forever after any crash, abrupt power
+/// loss, or `kill -9` mid-write. Only files whose modification time is older than a safety
+/// margin are removed, so an in-flight write on another thread/process is never touched: this
+/// function is called while holding `WriteLock`, which already serializes it against new
+/// `remember` calls, but an existing writer's open file handle predates that lock acquisition by
+/// definition and must not be deleted out from under it.
+fn reconcile_stale_temp_files(root: &Path) {
+    const STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(60);
+    let now = std::time::SystemTime::now();
+    for entry in walkdir::WalkDir::new(root)
+        .into_iter()
+        .filter_entry(|e| {
+            e.depth() == 0
+                || !(e.file_type().is_dir()
+                    && is_skipped_dir_name(&e.file_name().to_string_lossy()))
+        })
+        .filter_map(|e| e.ok())
+    {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy();
+        if !(name.starts_with('.') && name.contains(".tmp-")) {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else { continue };
+        let Ok(modified) = meta.modified() else {
+            continue;
+        };
+        let age = now.duration_since(modified).unwrap_or_default();
+        if age < STALE_AFTER {
+            continue;
+        }
+        if let Err(e) = std::fs::remove_file(entry.path()) {
+            tracing::warn!(
+                "could not remove stale temp file {}: {e}",
+                entry.path().display()
+            );
+        } else {
+            tracing::info!(
+                "removed stale temp file left by an interrupted write: {}",
+                entry.path().display()
+            );
+        }
+    }
 }
 
 impl SearchEngine {
@@ -533,6 +586,7 @@ impl SearchEngine {
     /// Per-file failures are collected in the summary and do not abort the sync.
     pub async fn index_directory(&self, root: &Path) -> Result<IndexSummary> {
         let _process_lock = WriteLock::acquire(root)?;
+        reconcile_stale_temp_files(root);
         let mut summary = IndexSummary::default();
         let files: Vec<PathBuf> = scan_dir(root)
             .into_iter()
@@ -1629,6 +1683,31 @@ mod tests {
         // Backslashes normalized to forward slashes
         let id_win = docid_for(r"notes\a.md");
         assert_eq!(id_a, id_win, "backslash normalized to forward slash");
+    }
+
+    #[tokio::test]
+    async fn index_directory_removes_stale_temp_files_but_keeps_fresh_ones() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let root = dir.path();
+        write(root, "note.md", "# Kept\n\nReal content.\n");
+        let stale = root.join(".leftover.tmp-999-123");
+        std::fs::write(&stale, "orphaned by a crashed writer").expect("write stale");
+        // Back-date it well past the staleness threshold.
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        let old_ft = filetime::FileTime::from_system_time(old);
+        filetime::set_file_mtime(&stale, old_ft).expect("set mtime");
+
+        let fresh = root.join(".inflight.tmp-999-456");
+        std::fs::write(&fresh, "a write in progress right now").expect("write fresh");
+
+        let e = engine(false).await;
+        e.index_directory(root).await.expect("index");
+
+        assert!(!stale.exists(), "stale temp file must be reconciled away");
+        assert!(
+            fresh.exists(),
+            "a temp file younger than the staleness margin must not be touched"
+        );
     }
 
     #[tokio::test]
