@@ -429,18 +429,23 @@ impl SearchEngine {
         }
 
         let _guard = self.write_lock.lock().await;
-        if let Some((old_id, _)) = self.db.find_document(&path).await? {
-            let old_chunks = self.db.chunk_ids_for_document(old_id).await?;
-            let mut h = self.hnsw.write();
-            for id in old_chunks {
-                h.remove(id)?;
-            }
+        let old_chunks = if let Some((old_id, _)) = self.db.find_document(&path).await? {
+            self.db.chunk_ids_for_document(old_id).await?
+        } else {
+            Vec::new()
+        };
+        // Commit the complete SQLite replacement first. The hash is not published until
+        // chunks and embeddings are present, so a later reconciliation can repair failures.
+        let (_doc_id, ids) = self
+            .db
+            .replace_document(&doc, &chunks, vectors.as_deref())
+            .await?;
+        // HNSW is a disposable cache; update it only after SQLite has committed.
+        let mut h = self.hnsw.write();
+        for id in old_chunks {
+            h.remove(id)?;
         }
-        let doc_id = self.db.insert_document(&doc).await?;
-        let ids = self.db.insert_chunks(doc_id, &chunks).await?;
         if let Some(vecs) = &vectors {
-            self.db.update_chunk_embeddings(&ids, vecs).await?;
-            let mut h = self.hnsw.write();
             for (id, v) in ids.iter().zip(vecs) {
                 h.insert(*id, v)?;
             }

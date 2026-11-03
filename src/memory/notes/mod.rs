@@ -340,27 +340,52 @@ impl SearchEngine {
         }
         let path = dir.join(format!("{}.md", slugify(title)));
         let text = render(note, Utc::now().date_naive());
-        // create_new: fails rather than overwriting a note that is already there.
+        // Publish through a same-directory temporary file. `hard_link` is used for admission:
+        // unlike rename, it fails when the destination already exists and therefore cannot
+        // overwrite a note created by another writer. sync_all makes the complete note durable
+        // before it becomes visible to indexers.
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let tmp = dir.join(format!(
+            ".{}.tmp-{}-{}",
+            slugify(title),
+            std::process::id(),
+            nonce
+        ));
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(&path)
-            .map_err(|e| {
-                if e.kind() == std::io::ErrorKind::AlreadyExists {
-                    MemoryError::ConfigError(format!("note already exists: {}", path.display()))
-                } else {
-                    MemoryError::IoError {
-                        path: path.display().to_string(),
-                        source: e,
-                    }
-                }
-            })?;
-        file.write_all(text.as_bytes())
+            .open(&tmp)
             .map_err(|e| MemoryError::IoError {
-                path: path.display().to_string(),
+                path: tmp.display().to_string(),
                 source: e,
             })?;
-        drop(file);
+        let result = (|| -> std::io::Result<()> {
+            file.write_all(text.as_bytes())?;
+            file.sync_all()?;
+            drop(file);
+            std::fs::hard_link(&tmp, &path)?;
+            let _ = std::fs::remove_file(&tmp);
+            if let Ok(parent) = std::fs::File::open(&dir) {
+                let _ = parent.sync_all();
+            }
+            Ok(())
+        })();
+        if let Err(e) = result {
+            let _ = std::fs::remove_file(&tmp);
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                return Err(MemoryError::ConfigError(format!(
+                    "note already exists: {}",
+                    path.display()
+                )));
+            }
+            return Err(MemoryError::IoError {
+                path: path.display().to_string(),
+                source: e,
+            });
+        }
         self.index_file(&root, &path).await?;
         Ok(path)
     }

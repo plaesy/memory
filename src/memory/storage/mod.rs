@@ -567,6 +567,97 @@ impl Database {
         Ok(changed)
     }
 
+    /// Atomically replace a document, its links, chunks, and embeddings.
+    ///
+    /// The document hash is committed only together with all chunks and vectors,
+    /// so an interrupted replacement cannot make the next reconciliation skip it.
+    pub async fn replace_document(
+        &self,
+        doc: &Document,
+        chunks: &[Chunk],
+        embeddings: Option<&[EmbeddingVector]>,
+    ) -> Result<(u64, Vec<u64>)> {
+        if embeddings.is_some_and(|vectors| vectors.len() != chunks.len()) {
+            return Err(MemoryError::InternalError(
+                "chunks and embeddings length mismatch".into(),
+            ));
+        }
+        let path = doc.source_path.to_string_lossy().replace('\\', "/");
+        let metadata = serde_json::to_string(&doc.metadata).map_err(json_err)?;
+        let revision = doc
+            .metadata
+            .get("revision")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        let indexed_at = doc.indexed_at.unwrap_or_else(chrono::Utc::now).to_rfc3339();
+        let conn = self.conn.lock();
+        conn.execute_batch("SAVEPOINT replace_document")
+            .map_err(db_err)?;
+        let res: rusqlite::Result<(u64, Vec<u64>)> = (|| {
+            let id: i64 = conn.query_row(
+                "INSERT INTO documents(source_path, hash, revision, metadata, body, indexed_at, body_start)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                 ON CONFLICT(source_path) DO UPDATE SET
+                    hash = excluded.hash, revision = excluded.revision,
+                    metadata = excluded.metadata, body = excluded.body,
+                    indexed_at = excluded.indexed_at, body_start = excluded.body_start
+                 RETURNING id",
+                params![path, doc.hash, revision, metadata, doc.body, indexed_at, doc.body_start_line.max(1) as i64],
+                |r| r.get(0),
+            )?;
+            conn.execute("DELETE FROM chunks WHERE document_id = ?1", params![id])?;
+            conn.execute("DELETE FROM links WHERE document_id = ?1", params![id])?;
+            for (target, line) in extract_wikilinks(&doc.body) {
+                let file_line = line + doc.body_start_line.saturating_sub(1);
+                conn.execute(
+                    "INSERT INTO links(document_id, target, line) VALUES (?1, ?2, ?3)",
+                    params![id, target, file_line as i64],
+                )?;
+            }
+            let mut stmt = conn.prepare_cached(
+                "INSERT INTO chunks(document_id, text, kind, layer, start_line, end_line, metadata, embedding)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            )?;
+            let mut ids = Vec::with_capacity(chunks.len());
+            for (index, chunk) in chunks.iter().enumerate() {
+                let meta = chunk
+                    .metadata
+                    .as_ref()
+                    .map(serde_json::to_string)
+                    .transpose()
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+                let embedding = embeddings
+                    .and_then(|vectors| vectors.get(index))
+                    .map(|v| vec_to_blob(v));
+                stmt.execute(params![
+                    id,
+                    chunk.text,
+                    kind_to_str(chunk.kind),
+                    chunk.layer as i64,
+                    chunk.start_line as i64,
+                    chunk.end_line as i64,
+                    meta,
+                    embedding
+                ])?;
+                ids.push(conn.last_insert_rowid() as u64);
+            }
+            bump_generation(&conn)?;
+            Ok((id as u64, ids))
+        })();
+        match res {
+            Ok(value) => {
+                conn.execute_batch("RELEASE replace_document")
+                    .map_err(db_err)?;
+                Ok(value)
+            }
+            Err(error) => {
+                let _ =
+                    conn.execute_batch("ROLLBACK TO replace_document; RELEASE replace_document");
+                Err(db_err(error))
+            }
+        }
+    }
+
     /// Insert or update a document (keyed by `source_path`).
     ///
     /// On update, all previous chunks of the document are removed (and with
