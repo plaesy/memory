@@ -141,10 +141,24 @@ impl RememberLock {
             match std::fs::create_dir(&path) {
                 Ok(()) => return Ok(Self { path }),
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    // Never follow a pre-existing symlink at the lock path. Apart from being
+                    // ambiguous, it cannot be reclaimed with remove_dir and would create a
+                    // permanent denial of service.
+                    let lock_meta =
+                        std::fs::symlink_metadata(&path).map_err(|error| MemoryError::IoError {
+                            path: path.display().to_string(),
+                            source: error,
+                        })?;
+                    if !lock_meta.file_type().is_dir() {
+                        return Err(MemoryError::ConfigError(format!(
+                            "lock path is not a directory: {}",
+                            path.display()
+                        )));
+                    }
                     // A crashed writer must not permanently disable memory. Only reclaim a lock
                     // whose directory has been untouched for ten minutes.
-                    let stale = std::fs::metadata(&path)
-                        .and_then(|m| m.modified())
+                    let stale = lock_meta
+                        .modified()
                         .ok()
                         .and_then(|t| t.elapsed().ok())
                         .map(|age| age > Duration::from_secs(600))
@@ -487,6 +501,30 @@ mod tests {
         };
         assert!(engine.remember(&big).await.is_err());
         assert!(!dir.path().join("ops").join("ok.md").exists());
+    }
+
+    #[tokio::test]
+    async fn remember_rejects_symlink_lock_path() {
+        let root = tempfile::tempdir().expect("root");
+        let outside = tempfile::tempdir().expect("outside");
+        if !dir_link(outside.path(), &root.path().join(".plaesy-remember.lock")) {
+            return;
+        }
+        let engine = engine(root.path()).await;
+        let note = NewNote {
+            folder: "ops".into(),
+            title: "lock symlink".into(),
+            body: "x".into(),
+            tier: "procedural".into(),
+            confidence: "medium".into(),
+            graph: None,
+        };
+        let err = engine
+            .remember(&note)
+            .await
+            .expect_err("symlink lock must fail");
+        assert!(err.to_string().contains("lock path is not a directory"));
+        assert!(!outside.path().join("ops").exists());
     }
 
     #[tokio::test]
