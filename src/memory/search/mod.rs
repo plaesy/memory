@@ -54,6 +54,7 @@ use crate::memory::indexer::{
     is_excluded, is_indexable, scan_dir, Chunker, Document, EventKind, Extractor, FileEvent,
 };
 use crate::memory::metrics::{IndexHealth, Metrics, SearchType, Timer};
+use crate::memory::notes::WriteLock;
 use crate::memory::search::rerank::{sigmoid, CrossEncoder};
 use crate::memory::storage::{
     ConfidenceLevel, Database, DatabaseStats, HnswIndex, ResultMeta, SearchResult,
@@ -479,12 +480,13 @@ impl SearchEngine {
     /// Index one file. `source_path` is stored relative to `root` (forward slashes).
     /// Skips the write when the content hash is unchanged.
     pub async fn index_file(&self, root: &Path, path: &Path) -> Result<IndexOutcome> {
+        let _process_lock = WriteLock::acquire(root)?;
         self.index_file_at(root, path, git_revision(root)).await
     }
 
     /// Like [`SearchEngine::index_file`] with a caller-supplied git revision
     /// (spawning `git` per file is slow, so directory syncs resolve it once).
-    async fn index_file_at(
+    pub(crate) async fn index_file_at(
         &self,
         root: &Path,
         path: &Path,
@@ -529,6 +531,7 @@ impl SearchEngine {
     /// Sync a directory: index new/changed files, remove documents whose file is gone.
     /// Per-file failures are collected in the summary and do not abort the sync.
     pub async fn index_directory(&self, root: &Path) -> Result<IndexSummary> {
+        let _process_lock = WriteLock::acquire(root)?;
         let mut summary = IndexSummary::default();
         let files: Vec<PathBuf> = scan_dir(root)
             .into_iter()
@@ -556,7 +559,7 @@ impl SearchEngine {
             }
         }
         for (_, stored) in self.db.document_paths().await? {
-            if !present.contains(&stored) && self.remove_path(&stored).await? {
+            if !present.contains(&stored) && self.remove_path_locked(&stored).await? {
                 summary.removed += 1;
             }
         }
@@ -567,6 +570,11 @@ impl SearchEngine {
     /// Remove a document (by stored relative path) from both stores.
     /// Returns whether it existed.
     pub async fn remove_path(&self, source_path: &str) -> Result<bool> {
+        let _process_lock = self.watch_root().map(WriteLock::acquire).transpose()?;
+        self.remove_path_locked(source_path).await
+    }
+
+    async fn remove_path_locked(&self, source_path: &str) -> Result<bool> {
         let _guard = self.write_lock.lock().await;
         let Some((doc_id, _)) = self.db.find_document(source_path).await? else {
             return Ok(false);
@@ -585,6 +593,14 @@ impl SearchEngine {
     /// Apply a batch of watcher events under `root`. Returns the number applied;
     /// failures are logged and counted in metrics, not propagated.
     pub async fn apply_events(&self, root: &Path, events: &[FileEvent]) -> usize {
+        let _process_lock = match WriteLock::acquire(root) {
+            Ok(lock) => lock,
+            Err(e) => {
+                self.metrics.record_error("apply_events_lock_failed");
+                tracing::warn!("failed to acquire index writer lock: {e}");
+                return 0;
+            }
+        };
         let mut applied = 0;
         for ev in events {
             if !is_indexable(&ev.path) || is_excluded(root, &ev.path, &self.config.exclude_dirs) {
@@ -593,7 +609,7 @@ impl SearchEngine {
             let res = match ev.kind {
                 EventKind::Added | EventKind::Modified => {
                     if ev.path.is_file() {
-                        self.index_file(root, &ev.path).await.map(|_| ())
+                        self.index_file_at(root, &ev.path, None).await.map(|_| ())
                     } else {
                         continue; // vanished between event and read
                     }
@@ -605,7 +621,7 @@ impl SearchEngine {
                         .unwrap_or(&ev.path)
                         .to_string_lossy()
                         .replace('\\', "/");
-                    self.remove_path(&rel).await.map(|_| ())
+                    self.remove_path_locked(&rel).await.map(|_| ())
                 }
             };
             match res {

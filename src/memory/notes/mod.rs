@@ -135,14 +135,14 @@ pub fn default_inbox(root: &std::path::Path) -> PathBuf {
 /// The graph preflight and file admission must be serialized: separate processes have separate
 /// SQLite connections and can otherwise both pass the duplicate-id check. A lock directory is
 /// created atomically by the OS, so it also works when several CLI processes race.
-struct RememberLock {
+pub(crate) struct WriteLock {
     path: PathBuf,
     stop: Arc<AtomicBool>,
     heartbeat: Option<JoinHandle<()>>,
 }
 
-impl RememberLock {
-    fn acquire(root: &Path) -> Result<Self> {
+impl WriteLock {
+    pub(crate) fn acquire(root: &Path) -> Result<Self> {
         let path = root.join(".plaesy-remember.lock");
         for _ in 0..200 {
             match std::fs::create_dir(&path) {
@@ -218,7 +218,7 @@ impl RememberLock {
     }
 }
 
-impl Drop for RememberLock {
+impl Drop for WriteLock {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(handle) = self.heartbeat.take() {
@@ -320,7 +320,7 @@ impl SearchEngine {
         }
         // Serialize the graph preflight with file admission across CLI processes. Without this,
         // two writers can both observe an unused graph id and create duplicate IDs.
-        let _write_lock = RememberLock::acquire(&root)?;
+        let _write_lock = WriteLock::acquire(&root)?;
         if let Some(g) = &note.graph {
             if !crate::memory::graph::NOTE_TYPES.contains(&g.note_type.as_str()) {
                 return Err(MemoryError::ConfigError(format!(
@@ -440,7 +440,7 @@ impl SearchEngine {
                 source: e,
             });
         }
-        self.index_file(&root, &path).await?;
+        self.index_file_at(&root, &path, None).await?;
         Ok(path)
     }
 }
