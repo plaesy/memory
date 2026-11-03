@@ -9,6 +9,11 @@ use crate::memory::search::{SearchEngine, TIERS};
 use chrono::{NaiveDate, Utc};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 /// Confidence values a note may declare.
@@ -132,6 +137,8 @@ pub fn default_inbox(root: &std::path::Path) -> PathBuf {
 /// created atomically by the OS, so it also works when several CLI processes race.
 struct RememberLock {
     path: PathBuf,
+    stop: Arc<AtomicBool>,
+    heartbeat: Option<JoinHandle<()>>,
 }
 
 impl RememberLock {
@@ -139,7 +146,35 @@ impl RememberLock {
         let path = root.join(".plaesy-remember.lock");
         for _ in 0..200 {
             match std::fs::create_dir(&path) {
-                Ok(()) => return Ok(Self { path }),
+                Ok(()) => {
+                    let stop = Arc::new(AtomicBool::new(false));
+                    let heartbeat_stop = Arc::clone(&stop);
+                    let heartbeat_path = path.clone();
+                    let heartbeat = std::thread::spawn(move || {
+                        while !heartbeat_stop.load(Ordering::Relaxed) {
+                            std::thread::sleep(Duration::from_secs(1));
+                            if heartbeat_stop.load(Ordering::Relaxed) {
+                                break;
+                            }
+                            // Create/remove a child so the lock directory mtime advances.
+                            // An active writer must never be reclaimed as stale.
+                            let heartbeat_file = heartbeat_path.join("heartbeat");
+                            if std::fs::OpenOptions::new()
+                                .create_new(true)
+                                .write(true)
+                                .open(&heartbeat_file)
+                                .is_ok()
+                            {
+                                let _ = std::fs::remove_file(heartbeat_file);
+                            }
+                        }
+                    });
+                    return Ok(Self {
+                        path,
+                        stop,
+                        heartbeat: Some(heartbeat),
+                    });
+                }
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                     // Never follow a pre-existing symlink at the lock path. Apart from being
                     // ambiguous, it cannot be reclaimed with remove_dir and would create a
@@ -185,6 +220,11 @@ impl RememberLock {
 
 impl Drop for RememberLock {
     fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.heartbeat.take() {
+            let _ = handle.join();
+        }
+        let _ = std::fs::remove_file(self.path.join("heartbeat"));
         let _ = std::fs::remove_dir(&self.path);
     }
 }
