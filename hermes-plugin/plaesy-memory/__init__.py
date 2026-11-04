@@ -119,6 +119,17 @@ def _find_binary() -> Optional[str]:
     return shutil.which(_BIN_NAME)
 
 
+def _default_database_path() -> Path:
+    """Mirror ``dirs::data_local_dir()/plaesy/memory/storage.db`` for sharing keys."""
+    if sys.platform == "win32":
+        root = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData/Local")
+    elif sys.platform == "darwin":
+        root = Path.home() / "Library/Application Support"
+    else:
+        root = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share")
+    return root / "plaesy" / "memory" / "storage.db"
+
+
 class _Client:
     """Thread-safe request/response client for the line-delimited JSON protocol."""
 
@@ -366,7 +377,9 @@ class PlaesyMemoryProvider(MemoryProvider):
         key = (
             str(Path(self._binary).resolve()),
             str(self._watch_dir.resolve()),
-            str(Path(env.get("MEMORY_DB_PATH", "")).resolve()),
+            str(Path(env["MEMORY_DB_PATH"]).resolve())
+            if env.get("MEMORY_DB_PATH")
+            else str(_default_database_path().resolve()),
         )
         self._read_only = kwargs.get("agent_context", "primary") != "primary"
         global _SHARED_CLIENT, _SHARED_KEY, _SHARED_REFS
