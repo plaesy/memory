@@ -280,7 +280,7 @@ export MEMORY_MODEL_NAME=all-MiniLM-L6-v2  # or multilingual-e5-small
 ```toml
 [memory]
 notes_dir = "C:/_"
-db_path = "%LOCALAPPDATA%/Plaesy/memory.db"
+db_path = "%LOCALAPPDATA%/Plaesy/memory/storage.db"
 model_dir = "%LOCALAPPDATA%/plaesy/models"
 
 [embeddings]

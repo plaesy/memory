@@ -556,7 +556,7 @@ pub enum LinkDirection {
 ```toml
 [memory]
 notes_dir = "C:/_"
-db_path = "%LOCALAPPDATA%/Plaesy/memory.db"
+db_path = "%LOCALAPPDATA%/Plaesy/memory/storage.db"
 model_dir = "%LOCALAPPDATA%/plaesy/models"
 chunk_size = 512
 enable_vector_search = true

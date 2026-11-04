@@ -7,12 +7,12 @@ Examples use `<vault>` for the folder that holds your notes. Replace it with you
 | Item | Location | Set by |
 |---|---|---|
 | Vault (your notes, source of truth) | `<vault>`, any folder you choose | `MEMORY_WATCH_DIR` |
-| Index database | `%LOCALAPPDATA%\plaesy\memory.db` (+ `.hnsw` snapshot) | default; `MEMORY_DB_PATH` overrides |
+| Index database | `%LOCALAPPDATA%\plaesy\memory\storage.db` (+ `.hnsw` snapshot) | default; `MEMORY_DB_PATH` overrides |
 | Embedding model | `%LOCALAPPDATA%\plaesy\models\<name>\` | default; `MEMORY_MODEL_DIR` overrides |
 | Datasets (evaluation only) | `%LOCALAPPDATA%\plaesy\datasets\` | convention |
 | Exclusions | folders or file names that are never indexed | `MEMORY_EXCLUDE_DIRS` |
 
-The index is a cache: deleting `memory.db` and re-indexing rebuilds it from the notes. The notes are never written by plaesy.
+The index is a derived local store: deleting `storage.db` and re-indexing rebuilds it from the notes. The notes are never written by plaesy.
 
 ## 2. Writing notes so they can be trusted
 
@@ -109,7 +109,7 @@ Add `-e MEMORY_MODEL_NAME=multilingual-e5-small` only after the model switch in 
 | `stats` shows `documents: 0` | database is new or points to the wrong file | check `MEMORY_DB_PATH`, run `memory index` |
 | `vector search: off` | model not found in the models folder | run `scripts/install-model.sh`, or set `PLAESY_MODEL_DIR` |
 | Results cite old paths | notes moved after indexing | `memory index` again |
-| Hermes writes to its own `state.db` | shim installed before the change | `make install-hermes-plugin` |
+| Hermes uses an unexpected database | plugin or process was started before the path change | reinstall/restart the plugin and check `memory stats` |
 | Search is slow on first run | model load and first embedding pass | normal; later runs use the embedding cache |
 
 ## 9. Checklist for a new machine

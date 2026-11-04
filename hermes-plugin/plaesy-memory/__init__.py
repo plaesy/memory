@@ -6,7 +6,7 @@ answers hybrid searches. Every hit carries a citation (file, line range, git rev
 and an evidence label (FACT | INFERRED), so recalled text is never presented without a source.
 
 Binary lookup: ``$PLAESY_MEMORY_BIN``, ``<this dir>/bin/``, then ``PATH``.
-Storage: ``$HERMES_HOME/plaesy-memory/state.db`` (profile-scoped).
+Storage: the platform-local Plaesy data directory, ``<data>/plaesy/memory/storage.db``; models live in ``<cache>/plaesy/models/<model_name>/``.
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 _BIN_NAME = "memory" + (".exe" if sys.platform == "win32" else "")
 _BIN_ARGS = ["serve"]
 _REQUEST_TIMEOUT = 30.0
+_STARTUP_TIMEOUT = 180.0
 _PREFETCH_LIMIT = 5
 
 SEARCH_SCHEMA = {
@@ -131,7 +132,12 @@ class _Client:
     def alive(self) -> bool:
         return self._proc.poll() is None
 
-    def call(self, method: str, params: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    def call(
+        self,
+        method: str,
+        params: Optional[dict[str, Any]] = None,
+        timeout: float = _REQUEST_TIMEOUT,
+    ) -> dict[str, Any]:
         """Send one request and return the ``result`` dict; raise RuntimeError on any failure."""
         with self._lock:
             if not self.alive():
@@ -152,10 +158,10 @@ class _Client:
 
             worker = threading.Thread(target=_roundtrip, daemon=True)
             worker.start()
-            worker.join(_REQUEST_TIMEOUT)
+            worker.join(timeout)
             if worker.is_alive():
                 self.close()  # a hung binary must not wedge the agent; restart is the caller's call
-                raise RuntimeError(f"{method} timed out after {_REQUEST_TIMEOUT:.0f}s")
+                raise RuntimeError(f"{method} timed out after {timeout:.0f}s")
         if "error" in result:
             raise RuntimeError(str(result["error"]))
         line = result.get("line", "")
@@ -334,12 +340,16 @@ class PlaesyMemoryProvider(MemoryProvider):
             raise RuntimeError(self.unavailable_reason())
         home = Path(kwargs.get("hermes_home") or os.environ.get("HERMES_HOME", "."))
         workspace = Path(kwargs.get("agent_workspace") or os.getcwd())
-        data_dir = home / "plaesy-memory"
-        data_dir.mkdir(parents=True, exist_ok=True)
         env = dict(os.environ)
-        # MEMORY_DB_PATH is deliberately not set here: the binary's per-OS default
-        # (<data dir>/plaesy/memory.db) is then shared by the CLI and Hermes.
-        env.setdefault("MEMORY_WATCH_DIR", str(workspace / ".plaesy"))
+        # Leave MEMORY_DB_PATH unset so the binary's platform-local default
+        # (<data>/plaesy/memory/storage.db) is shared by the CLI and Hermes.
+        # A shared ~/ _ vault is the default when present; projects without one
+        # retain the historical workspace-local fallback.
+        shared_vault = Path.home() / "_"
+        env.setdefault(
+            "MEMORY_WATCH_DIR",
+            str(shared_vault if shared_vault.is_dir() else workspace / ".plaesy"),
+        )
         env.setdefault("MEMORY_LOG_LEVEL", "warn")
         self._watch_dir = Path(env["MEMORY_WATCH_DIR"])
         # Popen fails with WinError 267 when cwd is not an existing directory (Hermes may run
@@ -348,7 +358,7 @@ class PlaesyMemoryProvider(MemoryProvider):
         self._client = _Client(self._binary, env, cwd)
         self._read_only = kwargs.get("agent_context", "primary") != "primary"
         try:
-            pong = self._client.call("ping")
+            pong = self._client.call("ping", timeout=_STARTUP_TIMEOUT)
             logger.info("plaesy-memory ready (vector_search=%s)", pong.get("vector_search"))
         except BaseException:
             # Any failure, not only RuntimeError: an open pipe left behind is a ResourceWarning.

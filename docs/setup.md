@@ -26,11 +26,11 @@ the models folder for your OS (table below). Lookup order at runtime: `embedding
 Defaults follow each OS's convention (implemented in `src/memory/paths.rs`, using the `dirs` crate). Models are a
 cache: they can be deleted and `make model` downloads them again. Data (database) is kept.
 
-| OS      | Models (cache)                                                                                                                                             | Database (data)                                    |
-| ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
-| Linux   | `$XDG_CACHE_HOME/plaesy/models` (default `~/.cache/plaesy/models`) | `$XDG_DATA_HOME/plaesy/memory.db` (default `~/.local/share/plaesy/memory.db`) |                                                    |
-| macOS   | `~/Library/Caches/plaesy/models` (exclude from backup)                                                                                                   | `~/Library/Application Support/plaesy/memory.db` |
-| Windows | `%LOCALAPPDATA%\plaesy\models`                                                                                                                           | `%LOCALAPPDATA%\plaesy\memory.db`                |
+| OS      | Models (cache)                                      | Database (persistent local data)                    |
+| ------- | --------------------------------------------------- | ---------------------------------------------------- |
+| Linux   | `$XDG_CACHE_HOME/plaesy/models` (default `~/.cache/plaesy/models`) | `$XDG_DATA_HOME/plaesy/memory/storage.db` (default `~/.local/share/plaesy/memory/storage.db`) |                                                    |
+| macOS   | `~/Library/Caches/plaesy/models` (exclude from backup)                                                                                                   | `~/Library/Application Support/plaesy/memory/storage.db` |
+| Windows | `%LOCALAPPDATA%\plaesy\models`                                                                                                                           | `%LOCALAPPDATA%\plaesy\memory\storage.db`                |
 
 Override any of them with `MEMORY_DB_PATH`, `MEMORY_MODEL_DIR`, or the config keys. Datasets for evaluation
 (for example LongMemEval) belong in `<data>/plaesy/datasets/`, not in the models folder.
@@ -68,8 +68,8 @@ Partial files are fine; only the keys you set are overridden.
 watch_dir = ".plaesy"
 
 [database]
-db_path = "<data folder>/plaesy/memory.db"   # default: the per-OS data folder (see File locations)
-                                                           # HNSW snapshot is stored beside it as memory.db.hnsw (+ .meta.json, .gen)
+db_path = "<data folder>/plaesy/memory/storage.db"   # default: the per-OS data folder (see File locations)
+                                                           # HNSW snapshot is stored beside it as storage.db.hnsw (+ .meta.json, .gen)
 
 [embeddings]
 model_dir = "C:/models/all-MiniLM-L6-v2"
@@ -114,7 +114,7 @@ A nested directory would not be found as a memory provider, so the flat name `pl
 The provider:
 
 - starts `memory serve` with `MEMORY_DB_PATH` and `MEMORY_WATCH_DIR` taken from the environment when set.
-  Defaults apply only when unset: `$HERMES_HOME/plaesy-memory/state.db` and `<agent workspace>/.plaesy`.
+  Defaults apply only when unset: `<data>/plaesy/memory/storage.db` and `$HOME/_` when that shared vault exists (otherwise `<agent workspace>/.plaesy`).
   For a shared vault, set both as user environment variables (see Configuration). Processes started before the change
   do not see them, so restart Hermes after setting them.
 - the binary answers immediately and indexes/watches in the background (searches see what is indexed so far)

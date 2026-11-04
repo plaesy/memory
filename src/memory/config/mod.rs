@@ -184,13 +184,13 @@ impl Default for LoggingConfig {
     }
 }
 
-/// Default database file: `<data root>/memory.db` (see [`crate::memory::paths`]).
+/// Default database file: `<data root>/memory/storage.db` (see [`crate::memory::paths`]).
 ///
-/// Falls back to `./memory.db` only when the platform has no data directory.
+/// Falls back to `./memory/storage.db` only when the platform has no data directory.
 fn default_db_path() -> PathBuf {
     crate::memory::paths::data_root()
-        .map(|d| d.join("memory.db"))
-        .unwrap_or_else(|| PathBuf::from("memory.db"))
+        .map(|d| d.join("memory").join("storage.db"))
+        .unwrap_or_else(|| PathBuf::from("memory").join("storage.db"))
 }
 
 impl Default for MemoryConfig {
@@ -422,6 +422,7 @@ fn merge_toml(base: &mut toml::Value, over: toml::Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     #[tokio::test]
     async fn test_load_from_file_merges_over_defaults() {
@@ -480,6 +481,10 @@ mod tests {
         let config = MemoryConfig::default();
         assert_eq!(config.watch_dir, PathBuf::from(".plaesy"));
         assert_eq!(config.search.default_limit, 10);
+        assert!(config
+            .database
+            .db_path
+            .ends_with(Path::new("memory").join("storage.db")));
     }
 
     #[test]
