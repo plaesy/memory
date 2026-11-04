@@ -92,7 +92,7 @@ sync re-indexes them.
   and the coverage figure. Excluded files are never extracted, and documents already indexed under an excluded path are
   removed on the next sync.
 - A document whose embedding fails is still stored and stays keyword-searchable.
-- Writers are serialised by one async mutex. Git revision is resolved once per directory sync.
+- Writers are serialised by an in-process async mutex plus the shared `.plaesy-memory-writer.lock` across processes. The lock covers indexing, watcher batches, removals, and note publication so SQLite and the external HNSW snapshot cannot be mutated concurrently by independent CLI/service processes. Git revision is resolved once per directory sync.
 
 ## Retrieval
 
@@ -134,7 +134,7 @@ The label describes how the passage was found, not whether its claim is true. Wh
 | `min_trust` excludes undeclared trust | treating unknown as high would defeat the filter | notes without metadata vanish under that filter |
 | Reranker off by default | one forward pass per candidate; gain not demonstrable at n = 94 | a possible small gain left unused |
 | Index is rebuildable, notes are truth | files stay editable by humans and diffable in git | re-index cost after schema changes |
-| One SQLite connection | simplest correct thing for one local agent | concurrent readers serialise |
+| One SQLite connection per engine | keeps the storage path simple and correct while the service owns SQLite/HNSW | concurrent SQL readers within one process currently serialize; scale-out uses one service per vault, and a reader pool is a measured follow-up rather than an unsafe multi-writer design |
 | `usearch` without default features | the default SIMD backend fails to link on Windows MSVC | slower distance kernels than the default build |
 | Crate `plaesy`, module `memory` | room for sibling Plaesy modules (`plaesy::memory::*`) | |
 | Hermes provider at `plugins/plaesy-memory/` | memory-provider discovery scans one level only | |

@@ -487,6 +487,11 @@ impl Database {
         if config.wal_mode && !in_memory {
             conn.query_row("PRAGMA journal_mode = WAL;", [], |_| Ok(()))
                 .map_err(db_err)?;
+            // WAL is the intended deployment mode: readers can continue while the single
+            // application writer commits. NORMAL preserves WAL durability while avoiding an
+            // fsync for every frame; the writer queue and short transactions bound contention.
+            conn.execute_batch("PRAGMA synchronous = NORMAL; PRAGMA wal_autocheckpoint = 1000;")
+                .map_err(db_err)?;
         }
         conn.execute_batch(&format!("PRAGMA cache_size = {};", config.cache_size))
             .map_err(db_err)?;

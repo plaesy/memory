@@ -8,6 +8,7 @@
 use crate::memory::config::MemoryConfig;
 use crate::memory::error::{MemoryError, Result};
 use crate::memory::indexer::Watcher;
+use crate::memory::notes::WriteLock;
 use crate::memory::search::SearchEngine;
 use crate::memory::{mcp, service};
 use clap::ValueEnum;
@@ -41,8 +42,19 @@ impl std::str::FromStr for Transport {
 /// Run the service until stdin closes or the HTTP server stops. `mcp` selects the Model Context
 /// Protocol transport; `transport` selects stdio vs HTTP.
 pub async fn run(config: MemoryConfig, mcp: bool, transport: Transport, port: u16) -> Result<()> {
+    let daemon_lock = if config.watch_dir.is_dir() {
+        Some(WriteLock::acquire_named(
+            &config.watch_dir,
+            ".plaesy-memory-daemon.lock",
+        )?)
+    } else {
+        None
+    };
     let engine = Arc::new(SearchEngine::from_config(&config).await?);
     engine.set_watch_root(config.watch_dir.clone());
+    engine.set_daemon_mode(daemon_lock.is_some());
+    // Keep the ownership lock alive until the protocol server exits.
+    let _daemon_lock = daemon_lock;
 
     let root = config.watch_dir.clone();
     if root.is_dir() {

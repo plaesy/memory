@@ -143,7 +143,36 @@ pub(crate) struct WriteLock {
 
 impl WriteLock {
     pub(crate) fn acquire(root: &Path) -> Result<Self> {
-        let path = root.join(".plaesy-remember.lock");
+        let daemon = root.join(".plaesy-memory-daemon.lock");
+        if let Ok(meta) = std::fs::symlink_metadata(&daemon) {
+            if !meta.file_type().is_dir() {
+                return Err(MemoryError::ConfigError(format!(
+                    "daemon lock path is not a directory: {}",
+                    daemon.display()
+                )));
+            }
+            let stale = meta
+                .modified()
+                .ok()
+                .and_then(|time| time.elapsed().ok())
+                .map(|age| age > Duration::from_secs(600))
+                .unwrap_or(false);
+            if stale {
+                // The daemon heartbeat stopped, so permit recovery after a crash. An active
+                // daemon refreshes this directory every second and cannot be reclaimed here.
+                let _ = std::fs::remove_dir(&daemon);
+            } else {
+                return Err(MemoryError::ConfigError(
+                    "memory daemon owns this vault; use its service API for writes".into(),
+                ));
+            }
+        }
+        Self::acquire_named(root, ".plaesy-memory-writer.lock")
+    }
+
+    /// Acquire a cross-process lock with a role-specific path.
+    pub(crate) fn acquire_named(root: &Path, name: &str) -> Result<Self> {
+        let path = root.join(name);
         for _ in 0..200 {
             match std::fs::create_dir(&path) {
                 Ok(()) => {
@@ -337,7 +366,11 @@ impl SearchEngine {
         }
         // Serialize the graph preflight with file admission across CLI processes. Without this,
         // two writers can both observe an unused graph id and create duplicate IDs.
-        let _write_lock = WriteLock::acquire(&root)?;
+        let _write_lock = if self.daemon_mode() {
+            None
+        } else {
+            Some(WriteLock::acquire(&root)?)
+        };
         if let Some(g) = &note.graph {
             if !crate::memory::graph::NOTE_TYPES.contains(&g.note_type.as_str()) {
                 return Err(MemoryError::ConfigError(format!(
@@ -592,7 +625,10 @@ mod tests {
     async fn remember_rejects_symlink_lock_path() {
         let root = tempfile::tempdir().expect("root");
         let outside = tempfile::tempdir().expect("outside");
-        if !dir_link(outside.path(), &root.path().join(".plaesy-remember.lock")) {
+        if !dir_link(
+            outside.path(),
+            &root.path().join(".plaesy-memory-writer.lock"),
+        ) {
             return;
         }
         let engine = engine(root.path()).await;

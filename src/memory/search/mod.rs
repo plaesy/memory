@@ -122,12 +122,14 @@ pub struct SearchEngine {
     chunker: Chunker,
     config: SearchConfig,
     metrics: Arc<Metrics>,
-    /// Serialises writers so SQLite and HNSW change together.
+    /// Serialises writers within this process; WriteLock also serialises every mutator across processes.
     write_lock: tokio::sync::Mutex<()>,
     /// Database generation captured by the last HNSW snapshot (`u64::MAX` = none).
     snapshot_generation: AtomicU64,
     /// Folder the index mirrors; set once at startup so `statistics` can report coverage.
     watch_root: std::sync::OnceLock<PathBuf>,
+    /// True when this engine is owned by the long-running daemon.
+    daemon_mode: std::sync::atomic::AtomicBool,
 }
 
 fn git_revision(dir: &Path) -> Option<String> {
@@ -255,6 +257,7 @@ impl SearchEngine {
             write_lock: tokio::sync::Mutex::new(()),
             snapshot_generation: AtomicU64::new(snapshot_generation),
             watch_root: std::sync::OnceLock::new(),
+            daemon_mode: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -293,6 +296,24 @@ impl SearchEngine {
     /// No-op for in-memory databases or when nothing changed since the last snapshot.
     /// Failures are logged, never fatal (the snapshot is only a cache).
     pub async fn save_snapshot(&self) {
+        let _process_lock = if self.daemon_mode() {
+            None
+        } else if let Some(root) = self.watch_root() {
+            match WriteLock::acquire(root) {
+                Ok(lock) => Some(lock),
+                Err(error) => {
+                    tracing::warn!("snapshot writer lock unavailable: {error}");
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+        self.save_snapshot_locked().await;
+    }
+
+    /// Snapshot publication for callers that already hold the process-wide writer lock.
+    async fn save_snapshot_locked(&self) {
         let Some(path) = Self::snapshot_path(&self.db) else {
             return;
         };
@@ -330,6 +351,14 @@ impl SearchEngine {
                         p.push(".meta.json");
                         PathBuf::from(p)
                     };
+                    // Invalidate the old marker before replacing any snapshot component. If the
+                    // process crashes at any point below, startup must rebuild from SQLite rather
+                    // than accepting a mixed-generation HNSW/data/manifest bundle.
+                    match std::fs::remove_file(&marker) {
+                        Ok(()) => {}
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(error) => return Err(error),
+                    }
                     // Replace the data, metadata, and identity manifest as complete files,
                     // then publish generation last.
                     std::fs::rename(&tmp, &path)?;
@@ -466,6 +495,17 @@ impl SearchEngine {
         Arc::clone(&self.db)
     }
 
+    /// Mark this engine as owned by a long-running daemon that already holds the
+    /// cross-process writer lock for the vault lifetime.
+    pub(crate) fn set_daemon_mode(&self, enabled: bool) {
+        self.daemon_mode
+            .store(enabled, std::sync::atomic::Ordering::Release);
+    }
+
+    pub(crate) fn daemon_mode(&self) -> bool {
+        self.daemon_mode.load(std::sync::atomic::Ordering::Acquire)
+    }
+
     // -- Indexing ----------------------------------------------------------
 
     /// Index (or re-index) a document, replacing any previous version.
@@ -534,7 +574,11 @@ impl SearchEngine {
     /// Index one file. `source_path` is stored relative to `root` (forward slashes).
     /// Skips the write when the content hash is unchanged.
     pub async fn index_file(&self, root: &Path, path: &Path) -> Result<IndexOutcome> {
-        let _process_lock = WriteLock::acquire(root)?;
+        let _process_lock = if self.daemon_mode() {
+            None
+        } else {
+            Some(WriteLock::acquire(root)?)
+        };
         self.index_file_at(root, path, git_revision(root)).await
     }
 
@@ -585,7 +629,11 @@ impl SearchEngine {
     /// Sync a directory: index new/changed files, remove documents whose file is gone.
     /// Per-file failures are collected in the summary and do not abort the sync.
     pub async fn index_directory(&self, root: &Path) -> Result<IndexSummary> {
-        let _process_lock = WriteLock::acquire(root)?;
+        let _process_lock = if self.daemon_mode() {
+            None
+        } else {
+            Some(WriteLock::acquire(root)?)
+        };
         reconcile_stale_temp_files(root);
         let mut summary = IndexSummary::default();
         // Replay durable note-publication work before the regular scan. This closes the window
@@ -637,14 +685,18 @@ impl SearchEngine {
                 summary.removed += 1;
             }
         }
-        self.save_snapshot().await;
+        self.save_snapshot_locked().await;
         Ok(summary)
     }
 
     /// Remove a document (by stored relative path) from both stores.
     /// Returns whether it existed.
     pub async fn remove_path(&self, source_path: &str) -> Result<bool> {
-        let _process_lock = self.watch_root().map(WriteLock::acquire).transpose()?;
+        let _process_lock = if self.daemon_mode() {
+            None
+        } else {
+            self.watch_root().map(WriteLock::acquire).transpose()?
+        };
         self.remove_path_locked(source_path).await
     }
 
@@ -667,12 +719,16 @@ impl SearchEngine {
     /// Apply a batch of watcher events under `root`. Returns the number applied;
     /// failures are logged and counted in metrics, not propagated.
     pub async fn apply_events(&self, root: &Path, events: &[FileEvent]) -> usize {
-        let _process_lock = match WriteLock::acquire(root) {
-            Ok(lock) => lock,
-            Err(e) => {
-                self.metrics.record_error("apply_events_lock_failed");
-                tracing::warn!("failed to acquire index writer lock: {e}");
-                return 0;
+        let _process_lock = if self.daemon_mode() {
+            None
+        } else {
+            match WriteLock::acquire(root) {
+                Ok(lock) => Some(lock),
+                Err(e) => {
+                    self.metrics.record_error("apply_events_lock_failed");
+                    tracing::warn!("failed to acquire index writer lock: {e}");
+                    return 0;
+                }
             }
         };
         let mut applied = 0;
@@ -710,7 +766,7 @@ impl SearchEngine {
                 }
             }
         }
-        self.save_snapshot().await;
+        self.save_snapshot_locked().await;
         applied
     }
 

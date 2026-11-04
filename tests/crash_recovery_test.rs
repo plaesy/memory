@@ -168,7 +168,7 @@ fn killing_remember_mid_write_leaves_no_partial_note_and_is_reconciled() {
     // SIGKILL also leaves the directory lock behind. Back-date that lock past its stale-lock
     // threshold so the next real CLI invocation exercises stale-lock recovery before it reaches
     // temp-file reconciliation (this is the actual power-loss sequence).
-    let lock_path = watch_dir.join(".plaesy-remember.lock");
+    let lock_path = watch_dir.join(".plaesy-memory-writer.lock");
     assert!(
         lock_path.is_dir(),
         "crashed writer must leave its lock directory"

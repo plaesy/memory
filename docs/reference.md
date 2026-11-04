@@ -602,8 +602,8 @@ Environment variable overrides: `PLAESY_*`, `MEMORY_*`.
 
 ## Limits and Trade-offs
 
-- **One SQLite connection** behind async mutex: single-user, local agents only. Not concurrent readers.
-- **English-default model**: all-MiniLM-L6-v2. Multilingual E5 available but not default (no multilingual tokenizer yet).
+- **One SQLite connection per daemon** behind an async mutex: concurrent SQL readers within one daemon currently serialize. Use one daemon per vault; do not open SQLite/HNSW directly from multiple agents.
+- **Single writer boundary**: SQLite WAL permits concurrent reads but still has one writer. Multi-host or sustained high-write workloads should migrate the metadata store to a client/server database.
+- **English-default model**: all-MiniLM-L6-v2. Multilingual E5 is available as an alternative.
 - **No network at runtime**: model download once by `make model` or `memory onboard`.
-- **No write-ahead logging for notes**: vault is the source of truth; index is rebuildable.
 - **ONNX RC version**: 2.0.0-rc.14 (stable release pending).
