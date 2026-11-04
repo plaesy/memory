@@ -99,6 +99,11 @@ pub async fn run(config: MemoryConfig, mcp: bool, transport: Transport, port: u1
     }
 
     if !mcp {
+        if transport == Transport::Http {
+            return Err(MemoryError::ConfigError(
+                "--transport http requires --mcp; the plain JSON service is stdio-only".into(),
+            ));
+        }
         // JSON service (Hermes provider) is stdio-only.
         return service::serve(&engine, tokio::io::stdin(), tokio::io::stdout()).await;
     }

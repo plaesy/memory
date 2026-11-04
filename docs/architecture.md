@@ -92,7 +92,32 @@ sync re-indexes them.
   and the coverage figure. Excluded files are never extracted, and documents already indexed under an excluded path are
   removed on the next sync.
 - A document whose embedding fails is still stored and stays keyword-searchable.
-- Writers are serialised by an in-process async mutex plus the shared `.plaesy-memory-writer.lock` across processes. The lock covers indexing, watcher batches, removals, and note publication so SQLite and the external HNSW snapshot cannot be mutated concurrently by independent CLI/service processes. Git revision is resolved once per directory sync.
+- Writers are serialised by an in-process async mutex plus the shared `.plaesy-memory-writer.lock` across processes. The lock covers indexing, watcher batches, removals, note publication, and HNSW snapshot publication so SQLite and the external HNSW snapshot cannot be mutated concurrently by independent CLI/service processes. Git revision is resolved once per directory sync.
+- `memory serve` additionally holds `.plaesy-memory-daemon.lock` for its whole lifetime (heartbeat every 1s). While a daemon owns a vault, standalone CLI writes (`memory remember`, `index`, etc.) are refused with "memory daemon owns this vault" rather than racing it — talk to the daemon's service API instead. A lock whose heartbeat has been silent for 10 minutes is treated as crashed and may be reclaimed.
+- `WriteLock::acquire_named` retries with capped exponential backoff (10ms → 250ms steps, ~30s budget) before giving up with "another memory write is still in progress". A single `remember` holds the lock for its whole embed+index duration (roughly 1-2s), so with several agents queued the wait compounds — size the retry budget to the expected queue depth, not just one writer's duration.
+
+### Simulating concurrency locally
+
+```bash
+cargo build --bin memory
+VAULT=/tmp/sim-vault; rm -rf "$VAULT"; mkdir -p "$VAULT/.plaesy"
+export MEMORY_WATCH_DIR="$VAULT" MEMORY_DB_PATH="$VAULT/.plaesy/state.db"
+
+# 1. Daemon ownership: start a daemon, then try a CLI write — it must be refused.
+target/debug/memory serve --mcp --transport http --port 8099 &   # or run in a separate terminal
+target/debug/memory remember "t" "b" --type context --id t1      # expect: "memory daemon owns this vault"
+
+# 2. Multi-agent writer contention: N CLI processes writing to the same vault with no daemon.
+#    All must exit 0 and all notes must land (no silent drops, no corruption).
+seq 1 10 | xargs -n1 -P10 -I{} target/debug/memory remember "Note {}" "body" --type context --id "sim-{}"
+find "$VAULT" -name '*.md' | wc -l   # expect 10
+
+# 3. Crash recovery: kill -9 the daemon, then confirm the automated test rather than
+#    waiting 10 real minutes — tests/crash_recovery_test.rs backdates the lock mtime.
+cargo test --test crash_recovery_test
+```
+
+Do not run multiple `memory serve` processes against the same vault at once — only the daemon lock itself prevents that, and two daemons racing each other's background watcher is unsupported.
 
 ## Retrieval
 

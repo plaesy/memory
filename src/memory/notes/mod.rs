@@ -171,9 +171,16 @@ impl WriteLock {
     }
 
     /// Acquire a cross-process lock with a role-specific path.
+    ///
+    /// Retries for up to ~30s with capped exponential backoff: a `remember` call that holds the
+    /// lock for its whole embed+index duration (roughly 1-2s) must not starve sibling agents
+    /// whose turn comes after 5+ others ahead of them in the queue.
     pub(crate) fn acquire_named(root: &Path, name: &str) -> Result<Self> {
         let path = root.join(name);
-        for _ in 0..200 {
+        let mut wait = Duration::from_millis(10);
+        let max_wait = Duration::from_millis(250);
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        loop {
             match std::fs::create_dir(&path) {
                 Ok(()) => {
                     let stop = Arc::new(AtomicBool::new(false));
@@ -231,7 +238,13 @@ impl WriteLock {
                         let _ = std::fs::remove_dir(&path);
                         continue;
                     }
-                    std::thread::sleep(Duration::from_millis(25));
+                    if std::time::Instant::now() >= deadline {
+                        return Err(MemoryError::ConfigError(
+                            "another memory write is still in progress".into(),
+                        ));
+                    }
+                    std::thread::sleep(wait);
+                    wait = std::cmp::min(wait * 2, max_wait);
                 }
                 Err(e) => {
                     return Err(MemoryError::IoError {
@@ -241,9 +254,6 @@ impl WriteLock {
                 }
             }
         }
-        Err(MemoryError::ConfigError(
-            "another memory write is still in progress".into(),
-        ))
     }
 }
 
