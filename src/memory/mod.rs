@@ -15,7 +15,7 @@
 //!
 //! - **Async Runtime**: Tokio
 //! - **Vector Search**: HNSW via usearch (Qdrant engine)
-//! - **Embeddings**: ONNX Runtime + all-MiniLM-L6-v2 (384-dim)
+//! - **Embeddings**: ONNX Runtime + multilingual-e5-small (384-dim)
 //! - **Full-Text Search**: SQLite FTS5 (BM25)
 //! - **Storage**: SQLite with WAL (write-ahead log) + crash recovery
 //! - **Observability**: tracing + in-process metrics with Prometheus text export

@@ -174,7 +174,12 @@ async fn keyword_mode_finds_lexical_queries() {
 
 #[tokio::test]
 async fn onnx_hybrid_beats_each_leg() {
-    let Ok(emb) = EmbeddingEngine::with_config(EmbeddingConfig::default()).await else {
+    let Ok(emb) = EmbeddingEngine::with_config(EmbeddingConfig {
+        model_name: "all-MiniLM-L6-v2".into(),
+        ..EmbeddingConfig::default()
+    })
+    .await
+    else {
         eprintln!("SKIPPED onnx_hybrid_beats_each_leg: no ONNX model installed");
         return;
     };
@@ -212,7 +217,12 @@ async fn onnx_hybrid_beats_each_leg() {
 #[tokio::test]
 async fn onnx_rerank_does_not_hurt_and_keeps_text_verbatim() {
     use plaesy::memory::rerank::CrossEncoder;
-    let Ok(emb) = EmbeddingEngine::with_config(EmbeddingConfig::default()).await else {
+    let Ok(emb) = EmbeddingEngine::with_config(EmbeddingConfig {
+        model_name: "all-MiniLM-L6-v2".into(),
+        ..EmbeddingConfig::default()
+    })
+    .await
+    else {
         eprintln!("SKIPPED onnx_rerank: no embedding model installed");
         return;
     };

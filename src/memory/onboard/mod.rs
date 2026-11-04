@@ -13,17 +13,17 @@ use crate::memory::Result;
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
-/// Default embedding model: `<models root>/all-MiniLM-L6-v2`.
-const EMBEDDING_MODEL: &str = "all-MiniLM-L6-v2";
-/// Files that make up the embedding model, with their download URLs.
+/// Default embedding model: `<models root>/multilingual-e5-small`.
+const EMBEDDING_MODEL: &str = "multilingual-e5-small";
+/// Files that make up the default multilingual embedding model.
 const EMBEDDING_FILES: &[(&str, &str)] = &[
     (
         "model.onnx",
-        "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx",
+        "https://huggingface.co/intfloat/multilingual-e5-small/resolve/main/onnx/model.onnx",
     ),
     (
-        "vocab.txt",
-        "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/vocab.txt",
+        "tokenizer.json",
+        "https://huggingface.co/intfloat/multilingual-e5-small/resolve/main/tokenizer.json",
     ),
 ];
 /// Optional reranker: `<models root>/ms-marco-MiniLM-L-6-v2`.

@@ -25,24 +25,26 @@ plaesy-memory uses embeddings for semantic search: text with similar meaning to 
 
 ## Model Selection
 
-### Default: all-MiniLM-L6-v2
+### Default: multilingual-e5-small
 
-**When to use**: English-language vaults, balanced latency/quality, no GPU available.
+**When to use**: Indonesian and other multilingual vaults, or code mixed with natural language. It is the default because the repository's Indonesian probe and published Indonesian retrieval evaluations favor multilingual E5.
+
+`all-MiniLM-L6-v2` remains supported for English-only vaults and is smaller/faster.
 
 | Property | Value |
 |----------|-------|
 | Dimension | 384 |
-| Language | English |
-| Size | 86 MB (ONNX, CPU only) |
-| Latency | 11 ms (cold, CPU) / 5.7 ms/text (batch of 32) |
-| Training | Contrastive learning on 1B sentence pairs (BERT base) |
-| Strengths | Well-established, optimized for CPU, semantic accuracy |
-| Weaknesses | English-only, sensitive to tokenization across languages |
+| Language | 100+ (including Indonesian) |
+| Size | ~470 MB (ONNX, CPU only) |
+| Latency | Higher than MiniLM; measure on your hardware |
+| Training | Multilingual contrastive learning |
+| Strengths | Strong cross-lingual and Indonesian retrieval |
+| Weaknesses | Larger/slower than MiniLM |
 
 **Setup** (automatic via `memory onboard`):
 
 ```bash
-MEMORY_MODEL_NAME=all-MiniLM-L6-v2
+MEMORY_MODEL_NAME=multilingual-e5-small
 ```
 
 Model downloaded to `%LOCALAPPDATA%/plaesy/models/` (Windows), `~/.cache/plaesy/models/` (Linux), or `~/Library/Caches/plaesy/models/` (macOS). Override with `PLAESY_MODEL_DIR`.
@@ -84,24 +86,23 @@ model_name = "multilingual-e5-small"
 
 With n = 8, results show direction, not statistical significance. E5 semantic excels on paraphrases, but hybrid fusion needs tuning for non-English.
 
-### Domain-Specific: all-indo-e5-small-v4, indonesian-embedding-small
+### Indonesian fine-tuned alternative: all-indo-e5-small-v4
 
-**When to use**: High-performance Indonesian or other specialized language vaults.
+**When to use**: Compare against the multilingual default on an Indonesian-only vault.
 
-| Model | Language | Size | Latency | Probe R@1/3 |
-|-------|----------|------|---------|------------|
-| all-indo-e5-small-v4 | Indonesian | 180 MB | ~12 ms | 7/8 · 8/8 |
-| indonesian-embedding-small (q8) | Indonesian | 90 MB (quantized) | ~8 ms | 7/8 · 8/8 |
+| Model | Language | Size | Local probe |
+|-------|----------|------|-------------|
+| all-indo-e5-small-v4 | Indonesian | ~449 MB ONNX | semantic 7/8 · 8/8; hybrid 6/8 · 8/8 |
+
+This model is based on `multilingual-e5-small` and fine-tuned by LazarusNLP. In the published MIRACL/TyDiQA Indonesian retrieval tables, it is competitive but does not consistently beat the base multilingual E5, so it remains an explicit alternative rather than the default.
 
 **Setup**:
 
 ```bash
 export MEMORY_MODEL_NAME=all-indo-e5-small-v4
-# or
-export MEMORY_MODEL_NAME=indonesian-embedding-small
 ```
 
-Trade-off: Specialization (better on Indonesian) vs generalization (E5 handles Indonesian + English + other languages).
+Download `model.onnx` and `tokenizer.json` from [LazarusNLP/all-indo-e5-small-v4](https://huggingface.co/LazarusNLP/all-indo-e5-small-v4). The engine accepts the same ONNX + Hugging Face tokenizer layout as E5.
 
 ---
 

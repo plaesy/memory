@@ -152,7 +152,15 @@ async fn incremental_sync_after_edit_and_delete() {
 
 #[tokio::test]
 async fn onnx_pipeline_when_model_installed() {
-    let Ok(emb) = EmbeddingEngine::with_config(EmbeddingConfig::default()).await else {
+    // This fixture's English ranking assertions are a regression test for the
+    // original MiniLM pipeline. The default model is multilingual E5; its
+    // Indonesian quality is covered by scripts/id_probe.sh and embeddings tests.
+    let Ok(emb) = EmbeddingEngine::with_config(EmbeddingConfig {
+        model_name: "all-MiniLM-L6-v2".into(),
+        ..EmbeddingConfig::default()
+    })
+    .await
+    else {
         eprintln!("SKIPPED onnx_pipeline_when_model_installed: no ONNX model installed");
         return;
     };

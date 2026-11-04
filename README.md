@@ -137,7 +137,7 @@ MemPalace 96.6% R@5) are self-reported on the full set with other settings; this
 The weak spot is `single-session-preference` (R@5 0.83 hybrid, n = 6). Reranking is therefore **off by default**: it costs one
 forward pass per candidate for no demonstrable gain at this sample size.
 
-**Indonesian probe** (`scripts/id_probe.sh all-MiniLM-L6-v2 multilingual-e5-small`; notes and queries in `docs/eval/id-probe/`).
+**Indonesian probe** (`scripts/id_probe.sh all-MiniLM-L6-v2 multilingual-e5-small`; notes and queries in `docs/eval/id-probe/`). The default model is now `multilingual-e5-small`; MiniLM is retained as an explicit English-only alternative.
 Eight notes written for this probe, eight paraphrased Indonesian queries labelled by the author. Top-1 / top-3 hit counts:
 
 | Model                                         | semantic   | hybrid     |
@@ -146,7 +146,7 @@ Eight notes written for this probe, eight paraphrased Indonesian queries labelle
 | multilingual-e5-small (`MEMORY_MODEL_NAME`) | 7/8 · 8/8 | 6/8 · 8/8 |
 
 This is a probe, not a benchmark: with n = 8 one query is 12.5 points, so treat the gap as a direction, not a result. The
-default stays MiniLM until e5 is checked on English notes (LongMemEval, which is not yet run for e5).
+The default is now multilingual E5. LongMemEval has not yet been rerun with E5, so English-vault performance remains an explicit validation gap.
 
 **Latency** (`scripts/latency_probe.py <plugin binary>`; one client, sequential, 200 requests per mode, 20-document vault, same machine as above):
 hybrid p50 2.7 ms / p95 4.2 ms; hybrid with `expand_links` p50 3.0 ms / p95 4.2 ms; keyword p50 1.1 ms / p95 1.8 ms.
@@ -192,10 +192,9 @@ The design target "p50 < 1 ms on 100K vectors" is **not met** here (3.9 ms at 50
 
 ## Known Limits
 
-- **English default model**: all-MiniLM-L6-v2. `multilingual-e5-small`
-  available (`MEMORY_MODEL_NAME`, see
-  [embeddings-guide](docs/embeddings-guide.md)) but not default yet.
-- **Tokenization**: WordPiece (MiniLM) or SentencePiece (E5). Does not
+- **Default model**: multilingual-e5-small (100+ languages, including Indonesian). `all-MiniLM-L6-v2` remains available via `MEMORY_MODEL_NAME` for English-only vaults.
+- **English validation**: LongMemEval has not yet been rerun with the new E5 default; keep this as an explicit validation gap.
+- **Tokenization**: WordPiece (MiniLM) or Hugging Face tokenizer JSON (E5). Does not
   strip accents. E5 better for non-ASCII.
 - **File types**: `.md`, `.markdown`, `.txt` only. Invalid YAML → plain
   text.

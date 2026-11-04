@@ -39,7 +39,7 @@ No model ⇒ keyword-only mode (a warning is logged).
 
 ### Multilingual model (optional, for non-English notes)
 
-The default `all-MiniLM-L6-v2` is English-only. `intfloat/multilingual-e5-small` (384 dimensions, same as the default) is
+The default `multilingual-e5-small` supports 100+ languages, including Indonesian. `all-MiniLM-L6-v2` remains available for English-only vaults. `multilingual-e5-small` (384 dimensions) is
 optional and works on Indonesian queries better in the probe we ran (see README, "Quality evidence"). Install it by hand:
 
 ```bash
