@@ -31,6 +31,14 @@ _REQUEST_TIMEOUT = 30.0
 _STARTUP_TIMEOUT = 180.0
 _PREFETCH_LIMIT = 5
 
+# Hermes may construct one provider per agent/session inside the same gateway process. A
+# daemon owns one vault, so those provider instances must share one child process rather
+# than racing to start several daemons against the same SQLite/HNSW store.
+_SHARED_LOCK = threading.RLock()
+_SHARED_CLIENT: Optional["_Client"] = None
+_SHARED_KEY: Optional[tuple[str, str, str]] = None
+_SHARED_REFS = 0
+
 SEARCH_SCHEMA = {
     "name": "plaesy_memory_search",
     "description": (
@@ -355,21 +363,47 @@ class PlaesyMemoryProvider(MemoryProvider):
         # Popen fails with WinError 267 when cwd is not an existing directory (Hermes may run
         # from a cwd it cannot pass to CreateProcess). Fall back to the process default.
         cwd = str(workspace) if workspace.is_dir() else None
-        self._client = _Client(self._binary, env, cwd)
+        key = (
+            str(Path(self._binary).resolve()),
+            str(self._watch_dir.resolve()),
+            str(Path(env.get("MEMORY_DB_PATH", "")).resolve()),
+        )
         self._read_only = kwargs.get("agent_context", "primary") != "primary"
-        try:
-            pong = self._client.call("ping", timeout=_STARTUP_TIMEOUT)
-            logger.info("plaesy-memory ready (vector_search=%s)", pong.get("vector_search"))
-        except BaseException:
-            # Any failure, not only RuntimeError: an open pipe left behind is a ResourceWarning.
-            self._client.close()
-            self._client = None
-            raise
+        global _SHARED_CLIENT, _SHARED_KEY, _SHARED_REFS
+        with _SHARED_LOCK:
+            if _SHARED_CLIENT is not None and not _SHARED_CLIENT.alive():
+                _SHARED_CLIENT.close()
+                _SHARED_CLIENT = None
+                _SHARED_KEY = None
+                _SHARED_REFS = 0
+            if _SHARED_CLIENT is not None and _SHARED_KEY != key:
+                raise RuntimeError("plaesy-memory already serves a different vault in this Hermes process")
+            if _SHARED_CLIENT is None:
+                client = _Client(self._binary, env, cwd)
+                try:
+                    pong = client.call("ping", timeout=_STARTUP_TIMEOUT)
+                except BaseException:
+                    client.close()
+                    raise
+                _SHARED_CLIENT = client
+                _SHARED_KEY = key
+                logger.info("plaesy-memory ready (vector_search=%s)", pong.get("vector_search"))
+            _SHARED_REFS += 1
+            self._client = _SHARED_CLIENT
 
     def shutdown(self) -> None:
-        if self._client:
-            self._client.close()
+        global _SHARED_CLIENT, _SHARED_KEY, _SHARED_REFS
+        with _SHARED_LOCK:
+            if self._client is None:
+                return
+            _SHARED_REFS = max(0, _SHARED_REFS - 1)
             self._client = None
+            # Keep the shared daemon alive for other provider instances. The gateway owns its
+            # lifetime; the last provider shutdown closes it and releases the daemon lock.
+            if _SHARED_REFS == 0 and _SHARED_CLIENT is not None:
+                _SHARED_CLIENT.close()
+                _SHARED_CLIENT = None
+                _SHARED_KEY = None
 
     # -- recall ------------------------------------------------------------
     def system_prompt_block(self) -> str:

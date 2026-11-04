@@ -19,6 +19,32 @@ BINARY = REPO / "target" / "release" / EXE
 
 
 class ProviderStartsWithMissingWorkspace(unittest.TestCase):
+    def test_provider_instances_share_one_daemon(self):
+        if not BINARY.is_file():
+            self.skipTest(f"release binary not built: {BINARY}")
+        saved = {k: os.environ.get(k) for k in ("PLAESY_MEMORY_BIN", "MEMORY_WATCH_DIR", "MEMORY_DB_PATH")}
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                os.environ["PLAESY_MEMORY_BIN"] = str(BINARY)
+                os.environ["MEMORY_WATCH_DIR"] = str(Path(tmp) / "vault")
+                os.environ["MEMORY_DB_PATH"] = str(Path(tmp) / "state.db")
+                shim = _load_shim()
+                first = shim.PlaesyMemoryProvider()
+                second = shim.PlaesyMemoryProvider()
+                first.initialize("first", hermes_home=tmp, agent_workspace=tmp, agent_context="primary")
+                second.initialize("second", hermes_home=tmp, agent_workspace=tmp, agent_context="primary")
+                try:
+                    self.assertIs(first._client, second._client)
+                finally:
+                    second.shutdown()
+                    first.shutdown()
+            finally:
+                for k, v in saved.items():
+                    if v is None:
+                        os.environ.pop(k, None)
+                    else:
+                        os.environ[k] = v
+
     def test_initialize_with_missing_workspace_connects(self):
         if not BINARY.is_file():
             self.skipTest(f"release binary not built: {BINARY}")
