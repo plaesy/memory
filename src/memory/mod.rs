@@ -225,6 +225,9 @@ pub mod hygiene;
 /// Memory gaps: questions the memory could not answer, and broken or stale notes (`memory missing`).
 pub mod gaps;
 
+/// Project-scoped source API duplicate audit.
+pub mod code_audit;
+
 /// Writing new notes on behalf of an agent (`memory_remember`); never overwrites.
 pub mod notes;
 

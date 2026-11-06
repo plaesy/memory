@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 50028da9cde6824ae2ef760607d91e94e367cf106b8c6f9f64a2f110fdef652f # shrinks to title = "", body = "", id = "", project = "\u{7f}"
+cc 2f222c1ab8b1687ca6e85512e3d791e95dedfbb72e25ebd4d2d8133011df0726 # shrinks to title = "\u{fffe}", body = "", id = "", project = ""

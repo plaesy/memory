@@ -41,7 +41,7 @@ path = {db:?}
 
 [embeddings]
 backend = "hashing"
-dimension = 64
+dimension = 384
 
 [search]
 default_limit = 10
@@ -124,7 +124,11 @@ fn killing_remember_mid_write_leaves_no_partial_note_and_is_reconciled() {
     });
 
     // Poll for the temp file to actually appear rather than guessing a fixed sleep.
-    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    // The real binary initializes its configured embedding/index engine before entering
+    // `remember`; on a cold machine that startup can exceed the old 15-second window.
+    // Wait for the observable publication boundary rather than failing before the
+    // fault-injection path is reached.
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
     let mut seen_tmp = false;
     while std::time::Instant::now() < deadline {
         if !find_tmp_files(&watch_dir).is_empty() {

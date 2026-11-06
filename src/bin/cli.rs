@@ -5,6 +5,8 @@
 //! memory search "query" [-n 10]   hybrid/semantic/keyword search with citations
 //! memory links NOTE [--outgoing]  notes linking to NOTE (or linked from it)
 //! memory hygiene [DIR] [--json]   stale notes, missing metadata, broken links
+//! memory code-find DIR --symbol NAME [--purpose TEXT] [--json]  find reusable Dart APIs
+//! memory code-audit DIR [--json]  secondary diagnostic for duplicate Dart APIs in a project tree
 //! memory missing [--resolve ID]   unanswered queries and broken or stale notes
 //! memory stats                    index statistics
 //! memory watch [DIR]              keep the index current until Ctrl-C
@@ -106,6 +108,26 @@ enum Command {
         /// List the links going out of NOTE instead.
         #[arg(long)]
         outgoing: bool,
+    },
+    /// Find an existing API to reuse (read-only).
+    CodeFind {
+        dir: PathBuf,
+        #[arg(long)]
+        symbol: String,
+        #[arg(long)]
+        purpose: Option<String>,
+        #[arg(long)]
+        include_tests: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Secondary diagnostic: audit project source APIs for duplicates.
+    CodeAudit {
+        dir: PathBuf,
+        #[arg(long)]
+        json: bool,
+        #[arg(long, value_parser = ["dart", "auto"], default_value = "auto")]
+        language: String,
     },
     /// Audit the memory: stale notes, missing verification metadata, broken links, dead paths.
     Hygiene {
@@ -411,10 +433,156 @@ async fn run(cli: Cli) -> Result<()> {
         return serve::run(config, mcp, transport, port).await;
     }
 
+    if let Command::CodeFind {
+        dir,
+        symbol,
+        purpose,
+        include_tests,
+        json,
+    } = &cli.command
+    {
+        require_dir(dir)?;
+        let report = plaesy::memory::code_audit::audit_with_options(
+            dir,
+            plaesy::memory::code_audit::Language::Dart,
+            *include_tests,
+        )
+        .map_err(|e| MemoryError::IoError {
+            path: dir.display().to_string(),
+            source: e,
+        })?;
+        let db = plaesy::memory::storage::Database::new(config.database.clone()).await?;
+        let graph = plaesy::memory::graph::load_graph(&db).await?;
+        let project_scope = dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_ascii_lowercase);
+        let records = graph
+            .notes
+            .into_iter()
+            .filter(|n| {
+                project_scope.as_deref().is_none_or(|scope| {
+                    n.project
+                        .as_deref()
+                        .is_some_and(|p| p.eq_ignore_ascii_case(scope))
+                        || n.scope.iter().any(|p| p.eq_ignore_ascii_case(scope))
+                })
+            })
+            .map(|n| {
+                let status = n.effective_status().to_string();
+                plaesy::memory::code_audit::CanonicalRecord {
+                    id: n.id,
+                    title: n.title,
+                    path: n.path,
+                    status,
+                    project: n.project,
+                    scope: n.scope,
+                }
+            })
+            .collect();
+        let result = plaesy::memory::code_audit::find(
+            &report.declarations,
+            symbol,
+            purpose.as_deref(),
+            records,
+        );
+        if *json {
+            print_json(&result);
+        } else {
+            println!("{}: {}", result.decision, result.query);
+            for c in &result.candidates {
+                println!(
+                    "{} {} ({}) {}:{}",
+                    c.match_kind,
+                    c.signature,
+                    c.container.as_deref().unwrap_or(""),
+                    c.file,
+                    c.line
+                );
+            }
+        }
+        return Ok(());
+    }
+
+    if let Command::CodeAudit {
+        dir,
+        json,
+        language: _,
+    } = &cli.command
+    {
+        require_dir(dir)?;
+        let mut report =
+            plaesy::memory::code_audit::audit(dir, plaesy::memory::code_audit::Language::Dart)
+                .map_err(|e| MemoryError::IoError {
+                    path: dir.display().to_string(),
+                    source: e,
+                })?;
+        let db = plaesy::memory::storage::Database::new(config.database.clone()).await?;
+        let graph = plaesy::memory::graph::load_graph(&db).await?;
+        let project_scope = dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_ascii_lowercase);
+        report.canonical_records = graph
+            .notes
+            .into_iter()
+            .filter(|n| {
+                project_scope.as_deref().is_none_or(|scope| {
+                    n.project
+                        .as_deref()
+                        .is_some_and(|p| p.eq_ignore_ascii_case(scope))
+                        || n.scope.iter().any(|p| p.eq_ignore_ascii_case(scope))
+                })
+            })
+            .map(|n| {
+                let status = n.effective_status().to_string();
+                plaesy::memory::code_audit::CanonicalRecord {
+                    id: n.id,
+                    title: n.title,
+                    path: n.path,
+                    status,
+                    project: n.project,
+                    scope: n.scope,
+                }
+            })
+            .collect();
+        drop(db);
+        if *json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report)
+                    .map_err(|e| MemoryError::ConfigError(e.to_string()))?
+            );
+        } else {
+            println!(
+                "scanned {} Dart files; {} declarations",
+                report.files_scanned,
+                report.declarations.len()
+            );
+            for g in &report.exact_duplicates {
+                println!(
+                    "ERROR exact duplicate {} ({} declarations)",
+                    g.key,
+                    g.declarations.len()
+                );
+            }
+            for g in &report.semantic_duplicates {
+                println!(
+                    "WARNING likely semantic duplicate ({} declarations)",
+                    g.declarations.len()
+                );
+            }
+        }
+        return Ok(());
+    }
     let engine = SearchEngine::from_config(&config).await?;
     engine.set_watch_root(config.watch_dir.clone());
     match cli.command {
-        Command::Config { sub: _ } | Command::Serve { .. } | Command::Onboard { .. } => {
+        Command::Config { sub: _ }
+        | Command::Serve { .. }
+        | Command::Onboard { .. }
+        | Command::CodeFind { .. }
+        | Command::CodeAudit { .. } => {
             unreachable!("handled above")
         }
         Command::Schedule { mode } => {

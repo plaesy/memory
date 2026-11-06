@@ -1,0 +1,11 @@
+# Project code discovery and audit
+
+Use `memory code-find <DIR> --symbol <NAME> [--purpose TEXT] [--json]` first. It performs a read-only scan of the safe Dart source tree and returns ranked declarations with `exact_signature`, `exact_name`, or purpose-based `semantic_candidate` matches. Its decision is `reuse_exact`, `reuse_candidate`, or `create_new`; canonical project/decision/context records are included and prevent a false `create_new`. Tests are excluded by default; pass `--include-tests` when needed.
+
+`memory code-audit <DIR> [--json] [--language dart|auto]` remains available as a secondary diagnostic for duplicate Dart declarations. It scans Dart files read-only. The scanner ignores comments and strings and uses a conservative lexer rather than regex-only matching. It excludes build products and vendored/generated trees (`.git`, `build`, `.dart_tool`, Flutter ephemeral/plugin symlink trees, `third_party`, `vendor`, `node_modules`, and common generated Dart filenames).
+
+`exact_duplicates` are groups sharing the same declaration signature and identical normalized body. `semantic_duplicates` are groups sharing a non-trivial normalized body while not already reported as exact duplicates; parameter and local identifier names are normalized, so names such as `login` and `signIn` can be reviewed together. Every group includes a `classification`: `cross_class_collision`, `framework_lifecycle`, `localization_variant`, `platform_variant`, `test_double`, or `review`. Only a project policy should promote a classification to a CI error; the scanner does not call every same-shaped method a defect.
+
+`canonical_records` contains project/decision/context graph notes whose project or scope matches the audited directory name, so findings can be reconciled with the project’s API records. Use the JSON output in CI or an agent gate, and require a human or analyzer-backed check before merging a refactor.
+
+The offline scanner does not perform Dart analyzer type resolution, inheritance analysis, or package-level symbol binding. For editor/CLI diagnostics, pair the registry with a Dart analyzer plugin; Dart’s official plugin system can report custom warnings and lints from `dart analyze` and `flutter analyze` (Dart 3.10+). Semgrep’s syntax-aware approach and LSP workspace symbols are useful complementary integrations for other languages.

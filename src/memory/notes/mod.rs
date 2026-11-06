@@ -285,9 +285,13 @@ pub fn render(note: &NewNote, today: NaiveDate) -> String {
         let json = serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into());
         let mut out = String::with_capacity(json.len());
         for c in json.chars() {
-            if c.is_control() && c != '\u{0}' {
+            let code = c as u32;
+            let is_noncharacter = (0xFDD0..=0xFDEF).contains(&code) || (code & 0xFFFF) >= 0xFFFE;
+            if is_noncharacter {
+                out.push_str(&format!("\\u{:04X}", code));
+            } else if c.is_control() && c != '\u{0}' {
                 // '\u{0}' never reaches here since JSON already escaped it as \u0000.
-                out.push_str(&format!("\\x{:02X}", c as u32));
+                out.push_str(&format!("\\x{:02X}", code));
             } else {
                 out.push(c);
             }
